@@ -36,6 +36,7 @@ import {
   getConfiguredApiUrl,
   isBackendConnected,
   probeServerHealth,
+  recoverLocalUsersAndPhotosToServer,
   setConfiguredApiUrl,
   setToken,
 } from './services/driveService';
@@ -214,6 +215,12 @@ export default function App() {
       setFolders(folderList);
 
       if (currentUser.role === 'admin') {
+        const rec = await recoverLocalUsersAndPhotosToServer();
+        if (rec.recoveredUsers > 0 || rec.recoveredPhotos > 0) {
+          showToast(
+            `Restored ${rec.recoveredUsers} user(s) and ${rec.recoveredPhotos} photo(s) from browser cache to Linux Server!`
+          );
+        }
         const overview = await driveService.getAdminOverview();
         setAdminOverview(overview);
         setLiveTelemetry((prev) => prev || overview);
