@@ -51,32 +51,37 @@ function dataUrlToFile(dataUrl, filename, mimeType = 'image/webp') {
   return new File([u8arr], filename, { type: mime });
 }
 
+let activeBaseUrl = '';
+
 export function getConfiguredApiUrl() {
   const saved = localStorage.getItem(STORAGE_KEYS.API_URL);
   if (saved) {
-    // Auto-clear old temporary trycloudflare URLs so we always use the permanent Tailscale Funnel URL
-    if (saved.includes('trycloudflare.com') || saved.includes('192.168.')) {
+    if (
+      saved.includes('trycloudflare.com') ||
+      saved.includes('192.168.') ||
+      saved.includes('blserv.tailf8397c.ts.net')
+    ) {
       localStorage.removeItem(STORAGE_KEYS.API_URL);
     } else {
       return saved.replace(/\/+$/, '');
     }
   }
-  const envUrl = import.meta.env.VITE_API_URL || DEFAULT_SERVER_URL;
-  return envUrl.replace(/\/+$/, '');
+  return activeBaseUrl;
 }
 
 export function setConfiguredApiUrl(url) {
   const cleaned = (url || '').trim().replace(/\/+$/, '');
-  if (!cleaned) {
+  if (!cleaned || cleaned.includes('blserv.tailf8397c.ts.net')) {
     localStorage.removeItem(STORAGE_KEYS.API_URL);
+    activeBaseUrl = '';
   } else {
     localStorage.setItem(STORAGE_KEYS.API_URL, cleaned);
+    activeBaseUrl = cleaned;
   }
 }
 
 export function getToken() {
   const tok = localStorage.getItem(STORAGE_KEYS.TOKEN);
-  // Never use an old browser-only local_token_ now that the Linux server is live
   if (tok && tok.startsWith('local_token_')) {
     localStorage.removeItem(STORAGE_KEYS.TOKEN);
     return null;
@@ -99,24 +104,30 @@ export function isBackendConnected() {
 }
 
 export async function probeServerHealth() {
-  const baseUrl = getConfiguredApiUrl();
-  try {
-    const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 8000);
-    const res = await fetch(`${baseUrl}/api/health`, { signal: controller.signal });
-    clearTimeout(timer);
-    if (res.ok) {
-      const data = await res.json();
-      if (data && data.status === 'ok') {
-        backendReachable = true;
-        return { connected: true, info: data };
+  // Try same-origin /api/health first (proxied by Vercel Edge / Vite), then direct Tailscale Funnel URL
+  const candidates = ['', DEFAULT_SERVER_URL];
+  const custom = localStorage.getItem(STORAGE_KEYS.API_URL);
+  if (custom) candidates.unshift(custom.replace(/\/+$/, ''));
+
+  for (const base of candidates) {
+    try {
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), 6000);
+      const res = await fetch(`${base}/api/health`, { signal: controller.signal });
+      clearTimeout(timer);
+      if (res.ok) {
+        const data = await res.json();
+        if (data && data.status === 'ok') {
+          activeBaseUrl = base;
+          backendReachable = true;
+          return { connected: true, info: data };
+        }
       }
+    } catch {
+      // Try next candidate
     }
-  } catch {
-    // Ignore transient ping error
   }
-  backendReachable = false;
-  return { connected: false, info: null };
+  return { connected: backendReachable, info: null };
 }
 
 function resolveMediaUrl(relativePath) {
