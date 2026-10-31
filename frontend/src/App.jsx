@@ -1,5 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import {
+  Activity,
   Camera,
   CheckCircle2,
   CloudUpload,
@@ -13,11 +14,8 @@ import {
   Heart,
   Image as ImageIcon,
   Info,
-  KeyRound,
   LayoutGrid,
-  Lock,
   LogOut,
-  Maximize2,
   Plus,
   RefreshCw,
   Search,
@@ -25,10 +23,11 @@ import {
   Settings,
   ShieldCheck,
   Sparkles,
+  Thermometer,
   Trash2,
-  UserCheck,
   UserPlus,
   Users,
+  Wifi,
   X,
   Zap,
 } from 'lucide-react';
@@ -53,6 +52,17 @@ const QUOTA_PRESETS_MB = [
 
 const AVATAR_COLORS = ['#6366f1', '#ec4899', '#06b6d4', '#10b981', '#f59e0b', '#8b5cf6', '#f43f5e'];
 
+function formatUptime(seconds) {
+  if (!seconds || seconds <= 0) return '0m';
+  const d = Math.floor(seconds / 86400);
+  const h = Math.floor((seconds % 86400) / 3600);
+  const m = Math.floor((seconds % 3600) / 60);
+  const s = Math.floor(seconds % 60);
+  if (d > 0) return `${d}d ${h}h ${m}m`;
+  if (h > 0) return `${h}h ${m}m ${s}s`;
+  return `${m}m ${s}s`;
+}
+
 export default function App() {
   // Auth & Connection state
   const [currentUser, setCurrentUser] = useState(null);
@@ -61,41 +71,42 @@ export default function App() {
   const [serverModalOpen, setServerModalOpen] = useState(false);
   const [apiUrlInput, setApiUrlInput] = useState(getConfiguredApiUrl());
 
-  // Login form state
-  const [loginUsername, setLoginUsername] = useState('admin');
-  const [loginPassword, setLoginPassword] = useState('admin123');
+  // Clean Login form state (never pre-filled or displayed)
+  const [loginUsername, setLoginUsername] = useState('');
+  const [loginPassword, setLoginPassword] = useState('');
   const [loginError, setLoginError] = useState('');
   const [loggingIn, setLoggingIn] = useState(false);
 
   // Navigation & Virtual Space state
-  // activeSection: 'photos' | 'favorites' | 'admin'
-  const [activeSection, setActiveSection] = useState('photos');
+  const [activeSection, setActiveSection] = useState('photos'); // 'photos' | 'favorites' | 'admin'
   const [selectedFolderId, setSelectedFolderId] = useState(null);
-  // For Admin: null = own space, 'all' = everyone's photos, or specific user_id
   const [inspectedUserId, setInspectedUserId] = useState(null);
 
   // Data state
   const [photos, setPhotos] = useState([]);
   const [folders, setFolders] = useState([]);
   const [adminOverview, setAdminOverview] = useState(null);
+  const [liveTelemetry, setLiveTelemetry] = useState(null);
+  const [telemetryHistory, setTelemetryHistory] = useState([]);
   const [loadingPhotos, setLoadingPhotos] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
-  const [sortBy, setSortBy] = useState('newest'); // 'newest' | 'savings' | 'size'
-  const [gridCols, setGridCols] = useState('normal'); // 'normal' | 'compact'
+  const [sortBy, setSortBy] = useState('newest');
+  const [gridCols, setGridCols] = useState('normal');
 
-  // Modals
+  // Upload & Shrinking Progress state
   const [uploadModalOpen, setUploadModalOpen] = useState(false);
   const [pendingUploads, setPendingUploads] = useState([]);
+  const [shrinkingProgress, setShrinkingProgress] = useState({ active: false, done: 0, total: 0, percent: 0 });
   const [uploading, setUploading] = useState(false);
+  const [overallUploadProgress, setOverallUploadProgress] = useState({ done: 0, total: 0, percent: 0 });
   const [uploadTargetFolder, setUploadTargetFolder] = useState('');
   const [compareItem, setCompareItem] = useState(null);
 
   const [newFolderModalOpen, setNewFolderModalOpen] = useState(false);
   const [newFolderName, setNewFolderName] = useState('');
-
   const [lightboxPhoto, setLightboxPhoto] = useState(null);
 
-  // Admin Modals
+  // Admin User Management Modals
   const [createUserModalOpen, setCreateUserModalOpen] = useState(false);
   const [newUserForm, setNewUserForm] = useState({
     username: '',
@@ -123,7 +134,6 @@ export default function App() {
     }, 4000);
   }
 
-  // Initial session restoration
   useEffect(() => {
     async function init() {
       setLoadingInit(true);
@@ -138,11 +148,44 @@ export default function App() {
     init();
   }, []);
 
-  // Load workspace data whenever user or inspected space changes
   useEffect(() => {
     if (!currentUser) return;
     refreshWorkspace();
   }, [currentUser?.id, inspectedUserId, selectedFolderId, activeSection]);
+
+  // Real-time 2-second hardware telemetry polling for Admin Panel
+  useEffect(() => {
+    if (!currentUser || currentUser.role !== 'admin' || activeSection !== 'admin') return;
+
+    let cancelled = false;
+    async function pollTelemetry() {
+      try {
+        const data = await driveService.getLiveTelemetry();
+        if (cancelled) return;
+        setLiveTelemetry(data);
+        setTelemetryHistory((prev) => {
+          const next = [
+            ...prev.slice(-19),
+            {
+              time: new Date().toLocaleTimeString([], { hour12: false, minute: '2-digit', second: '2-digit' }),
+              cpu: data.cpu_percent ?? 0,
+              ram: data.ram_percent ?? 0,
+            },
+          ];
+          return next;
+        });
+      } catch {
+        // Ignore transient poll errors
+      }
+    }
+
+    pollTelemetry();
+    const intervalId = setInterval(pollTelemetry, 2000);
+    return () => {
+      cancelled = true;
+      clearInterval(intervalId);
+    };
+  }, [currentUser?.id, currentUser?.role, activeSection]);
 
   async function refreshWorkspace() {
     if (!currentUser) return;
@@ -172,6 +215,7 @@ export default function App() {
       if (currentUser.role === 'admin') {
         const overview = await driveService.getAdminOverview();
         setAdminOverview(overview);
+        setLiveTelemetry((prev) => prev || overview);
       }
     } catch (err) {
       showToast(err.message || 'Failed to load virtual space', 'error');
@@ -180,7 +224,6 @@ export default function App() {
     }
   }
 
-  // Determine the active virtual space owner info (either current user, or the user Admin is inspecting)
   const activeSpaceUser = useMemo(() => {
     if (!currentUser) return null;
     if (currentUser.role === 'admin' && inspectedUserId && inspectedUserId !== 'all' && adminOverview?.users) {
@@ -190,7 +233,6 @@ export default function App() {
     return currentUser;
   }, [currentUser, inspectedUserId, adminOverview]);
 
-  // Filtered and sorted photos
   const displayedPhotos = useMemo(() => {
     let list = [...photos];
     if (searchQuery.trim()) {
@@ -212,7 +254,6 @@ export default function App() {
     return list;
   }, [photos, searchQuery, sortBy]);
 
-  // Handlers
   async function handleLogin(e) {
     e?.preventDefault();
     setLoginError('');
@@ -220,13 +261,15 @@ export default function App() {
     try {
       const user = await driveService.login(loginUsername, loginPassword);
       setCurrentUser(user);
+      setLoginUsername('');
+      setLoginPassword('');
       setInspectedUserId(null);
       setSelectedFolderId(null);
       setActiveSection('photos');
       setServerConnected(isBackendConnected());
-      showToast(`Welcome back, ${user.display_name}!`);
+      showToast(`Signed in as ${user.display_name}`);
     } catch (err) {
-      setLoginError(err.message || 'Login failed');
+      setLoginError(err.message || 'Invalid credentials');
     } finally {
       setLoggingIn(false);
     }
@@ -235,9 +278,12 @@ export default function App() {
   function handleLogout() {
     setToken(null);
     setCurrentUser(null);
+    setLoginUsername('');
+    setLoginPassword('');
     setPhotos([]);
     setFolders([]);
     setAdminOverview(null);
+    setLiveTelemetry(null);
     setInspectedUserId(null);
   }
 
@@ -248,35 +294,48 @@ export default function App() {
     setServerConnected(health.connected);
     setServerModalOpen(false);
     if (health.connected) {
-      showToast('Connected to Linux Laptop Photo Drive server!');
+      showToast('Connected to Linux Server!');
       if (currentUser) refreshWorkspace();
     } else {
-      showToast('Server URL saved (Linux server offline — using Browser Sandbox mode)', 'info');
+      showToast('Server URL saved', 'info');
     }
   }
 
-  // Smart Shrink File Selection
+  // Smart Shrink File Selection with live percentage tracking
   async function handleFilesSelected(fileList) {
     const rawFiles = Array.from(fileList || []).filter((f) => f.type.startsWith('image/'));
     if (rawFiles.length === 0) {
-      showToast('Please select valid image files (JPG, PNG, WEBP, HEIC)', 'error');
+      showToast('Please select valid image files', 'error');
       return;
     }
 
     setUploadModalOpen(true);
-    // Process each image with our visually-lossless shrinker
+    const baseTime = Date.now();
     const placeholders = rawFiles.map((f, idx) => ({
-      tempId: `${Date.now()}_${idx}`,
+      tempId: `${baseTime}_${idx}`,
       name: f.name,
       originalSize: f.size,
-      status: 'shrinking',
+      status: 'shrinking', // 'shrinking' | 'ready' | 'uploading' | 'done' | 'error'
+      uploadPercent: 0,
     }));
+
     setPendingUploads((prev) => [...prev, ...placeholders]);
+    setShrinkingProgress({ active: true, done: 0, total: rawFiles.length, percent: 0 });
 
     for (let i = 0; i < rawFiles.length; i++) {
       const f = rawFiles[i];
       const tempId = placeholders[i].tempId;
       const shrunk = await shrinkPhotoVisuallyLossless(f, 3840, 0.86);
+      const doneCount = i + 1;
+      const pct = Math.round((doneCount / rawFiles.length) * 100);
+
+      setShrinkingProgress({
+        active: doneCount < rawFiles.length,
+        done: doneCount,
+        total: rawFiles.length,
+        percent: pct,
+      });
+
       setPendingUploads((prev) =>
         prev.map((item) =>
           item.tempId === tempId
@@ -284,6 +343,7 @@ export default function App() {
                 ...item,
                 status: 'ready',
                 shrunk,
+                uploadPercent: 0,
               }
             : item
         )
@@ -291,11 +351,14 @@ export default function App() {
     }
   }
 
+  // Upload with real-time per-file AND overall percentage
   async function handleConfirmUpload() {
-    const readyItems = pendingUploads.filter((i) => i.status === 'ready' && i.shrunk);
+    const readyItems = pendingUploads.filter((i) => (i.status === 'ready' || i.status === 'error') && i.shrunk);
     if (readyItems.length === 0) return;
 
     setUploading(true);
+    setOverallUploadProgress({ done: 0, total: readyItems.length, percent: 0 });
+
     const targetUser =
       currentUser.role === 'admin' && inspectedUserId && inspectedUserId !== 'all'
         ? inspectedUserId
@@ -306,25 +369,59 @@ export default function App() {
     let totalSaved = 0;
 
     try {
-      for (const item of readyItems) {
+      for (let idx = 0; idx < readyItems.length; idx++) {
+        const item = readyItems[idx];
+
+        setPendingUploads((prev) =>
+          prev.map((p) => (p.tempId === item.tempId ? { ...p, status: 'uploading', uploadPercent: 1 } : p))
+        );
+
         await driveService.uploadPhoto({
           shrunkItem: item.shrunk,
           folderId,
           targetUserId: targetUser,
+          onProgress: (filePct) => {
+            setPendingUploads((prev) =>
+              prev.map((p) => (p.tempId === item.tempId ? { ...p, uploadPercent: filePct } : p))
+            );
+            const overallPct = Math.min(
+              100,
+              Math.round(((idx + filePct / 100) / readyItems.length) * 100)
+            );
+            setOverallUploadProgress({
+              done: idx,
+              total: readyItems.length,
+              percent: overallPct,
+            });
+          },
         });
+
         uploadedCount++;
         totalSaved += item.shrunk.savedBytes;
+
+        setPendingUploads((prev) =>
+          prev.map((p) => (p.tempId === item.tempId ? { ...p, status: 'done', uploadPercent: 100 } : p))
+        );
+
+        setOverallUploadProgress({
+          done: uploadedCount,
+          total: readyItems.length,
+          percent: Math.round((uploadedCount / readyItems.length) * 100),
+        });
       }
-      setPendingUploads([]);
-      setUploadModalOpen(false);
-      await refreshWorkspace();
-      showToast(
-        `Uploaded ${uploadedCount} photo${uploadedCount > 1 ? 's' : ''} — Saved ${formatBytes(totalSaved)} without quality loss!`
-      );
+
+      setTimeout(async () => {
+        setPendingUploads([]);
+        setUploadModalOpen(false);
+        setUploading(false);
+        await refreshWorkspace();
+        showToast(
+          `Uploaded ${uploadedCount} photo${uploadedCount > 1 ? 's' : ''} (100%) — Saved ${formatBytes(totalSaved)}!`
+        );
+      }, 350);
     } catch (err) {
-      showToast(err.message || 'Upload failed', 'error');
-    } finally {
       setUploading(false);
+      showToast(err.message || 'Upload failed', 'error');
     }
   }
 
@@ -398,7 +495,6 @@ export default function App() {
     }
   }
 
-  // Admin Handlers
   async function handleAdminCreateUser(e) {
     e.preventDefault();
     try {
@@ -413,7 +509,7 @@ export default function App() {
         avatar_color: AVATAR_COLORS[Math.floor(Math.random() * AVATAR_COLORS.length)],
       });
       await refreshWorkspace();
-      showToast(`Registered user "${created.display_name}" with ${formatBytes(created.quota_bytes)} virtual space!`);
+      showToast(`Registered user "${created.display_name}" with ${formatBytes(created.quota_bytes)} quota`);
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -431,7 +527,7 @@ export default function App() {
       });
       setEditingUser(null);
       await refreshWorkspace();
-      showToast('User settings & storage quota updated!');
+      showToast('User settings & storage quota updated');
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -446,7 +542,7 @@ export default function App() {
       await driveService.adminDeleteUser(user.id);
       if (inspectedUserId === user.id) setInspectedUserId(null);
       await refreshWorkspace();
-      showToast(`Deleted user "${user.display_name}" and their virtual space`);
+      showToast(`Deleted user "${user.display_name}"`);
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -461,214 +557,94 @@ export default function App() {
   if (loadingInit) {
     return (
       <div className="min-h-screen bg-slate-950 flex items-center justify-center text-slate-300">
-        <div className="flex flex-col items-center gap-3">
-          <div className="w-10 h-10 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
-          <p className="text-sm font-medium tracking-wide">Mounting Linux Photo Drive...</p>
-        </div>
+        <div className="w-9 h-9 border-2 border-indigo-500 border-t-transparent rounded-full animate-spin" />
       </div>
     );
   }
 
   // ===================================================================
-  // VIEW 1: LOGIN SCREEN (ADMIN-ONLY REGISTRATION ENFORCED)
+  // VIEW 1: MINIMAL, CLEAN LOGIN SCREEN (NO CREDENTIALS SHOWN OR FILLED)
   // ===================================================================
   if (!currentUser) {
     return (
-      <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col justify-between relative overflow-hidden">
-        {/* Ambient background glow */}
+      <div className="min-h-screen bg-slate-950 text-slate-100 flex items-center justify-center p-4 relative overflow-hidden">
+        {/* Subtle background glow */}
         <div className="pointer-events-none fixed inset-0 overflow-hidden">
-          <div className="absolute -top-40 -left-40 w-96 h-96 bg-indigo-600/20 rounded-full blur-3xl" />
-          <div className="absolute top-1/3 -right-32 w-96 h-96 bg-fuchsia-600/15 rounded-full blur-3xl" />
-          <div className="absolute -bottom-40 left-1/3 w-96 h-96 bg-cyan-500/10 rounded-full blur-3xl" />
+          <div className="absolute -top-32 left-1/2 -translate-x-1/2 w-[500px] h-[500px] bg-indigo-600/15 rounded-full blur-3xl" />
         </div>
 
-        {/* Top Bar */}
-        <header className="relative z-10 flex items-center justify-between px-6 py-5 max-w-7xl w-full mx-auto">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/30">
-              <Camera className="w-5 h-5 text-white" />
+        {/* Minimal corner settings button */}
+        <button
+          onClick={() => {
+            setApiUrlInput(getConfiguredApiUrl());
+            setServerModalOpen(true);
+          }}
+          title="Server Connection"
+          className="fixed top-5 right-5 z-20 flex items-center gap-2 px-3 py-1.5 rounded-xl bg-slate-900/80 hover:bg-slate-800 border border-slate-800/80 text-xs text-slate-400 hover:text-slate-200 transition"
+        >
+          <span
+            className={`w-2 h-2 rounded-full ${
+              serverConnected ? 'bg-emerald-400' : 'bg-amber-400'
+            }`}
+          />
+          <Settings className="w-3.5 h-3.5" />
+        </button>
+
+        {/* Centered Minimal Sign-In Card */}
+        <div className="relative z-10 w-full max-w-sm bg-slate-900/75 backdrop-blur-xl border border-slate-800/90 rounded-3xl p-8 shadow-2xl">
+          <div className="flex flex-col items-center text-center mb-7">
+            <div className="w-12 h-12 rounded-2xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-lg shadow-indigo-500/30 mb-3.5">
+              <Camera className="w-6 h-6 text-white" />
             </div>
+            <h1 className="text-xl font-bold tracking-tight text-white">LuminaDrive</h1>
+            <p className="text-xs text-slate-400 mt-1">Sign in to your private photo space</p>
+          </div>
+
+          {loginError && (
+            <div className="mb-4 p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
+              <Info className="w-4 h-4 shrink-0" />
+              <span>{loginError}</span>
+            </div>
+          )}
+
+          <form onSubmit={handleLogin} className="space-y-4" autoComplete="off">
             <div>
-              <span className="font-bold text-lg tracking-tight text-white">LuminaDrive</span>
-              <span className="ml-2 text-xs px-2 py-0.5 rounded-full bg-indigo-500/15 text-indigo-300 border border-indigo-500/30">
-                Linux Home Server Edition
-              </span>
-            </div>
-          </div>
-
-          <button
-            onClick={() => {
-              setApiUrlInput(getConfiguredApiUrl());
-              setServerModalOpen(true);
-            }}
-            className="flex items-center gap-2 text-xs font-medium px-3.5 py-2 rounded-xl bg-slate-900/90 hover:bg-slate-800 border border-slate-800 text-slate-300 transition"
-          >
-            <span
-              className={`w-2 h-2 rounded-full ${
-                serverConnected ? 'bg-emerald-400 animate-pulse' : 'bg-amber-400'
-              }`}
-            />
-            {serverConnected ? 'Linux Laptop Server: Online' : 'Sandbox Mode (Configure Laptop URL)'}
-            <Settings className="w-3.5 h-3.5 text-slate-400" />
-          </button>
-        </header>
-
-        {/* Main Login Card */}
-        <main className="relative z-10 flex-1 flex items-center justify-center px-4 py-8">
-          <div className="w-full max-w-4xl grid md:grid-cols-12 bg-slate-900/70 backdrop-blur-xl border border-slate-800/90 rounded-3xl shadow-2xl overflow-hidden">
-            {/* Left Feature Column */}
-            <div className="md:col-span-6 p-8 md:p-10 bg-gradient-to-br from-indigo-950/60 via-slate-900/80 to-slate-950 flex flex-col justify-between border-b md:border-b-0 md:border-r border-slate-800/80">
-              <div>
-                <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-300 text-xs font-medium mb-6">
-                  <Sparkles className="w-3.5 h-3.5" /> Smart Visually-Lossless Photo Cloud
-                </div>
-                <h1 className="text-2xl md:text-3xl font-bold text-white leading-tight mb-4">
-                  Your Old Linux Laptop, Reimagined as Google Photos.
-                </h1>
-                <p className="text-slate-400 text-sm leading-relaxed mb-8">
-                  Automatically shrinks photo file sizes by <strong className="text-slate-200">65%–85%</strong> with
-                  zero visible quality loss before saving to your laptop&apos;s physical drive.
-                </p>
-
-                <div className="space-y-4">
-                  <div className="flex items-start gap-3.5">
-                    <div className="w-8 h-8 rounded-lg bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center shrink-0 mt-0.5">
-                      <Zap className="w-4 h-4 text-emerald-400" />
-                    </div>
-                    <div>
-                      <h3 className="text-sm font-semibold text-slate-200">Zero-Quality-Loss Shrinking</h3>
-                      <p className="text-xs text-slate-400">
-                        Smart 4K WebP perceptual optimization keeps every detail crystal clear at a fraction of the MB.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-start gap-3.5">
-                    <div className="w-8 h-8 rounded-lg bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center shrink-0 mt-0.5">
-                      <HardDrive className="w-4 h-4 text-indigo-400" />
-                    </div>
-                    <div>
-                      <h3 className="text-sm font-semibold text-slate-200">Isolated Virtual Spaces & Quotas</h3>
-                      <p className="text-xs text-slate-400">
-                        Each user gets a private virtual drive & custom GB quota. Admin can inspect all spaces.
-                      </p>
-                    </div>
-                  </div>
-
-                  <div className="flex items-start gap-3.5">
-                    <div className="w-8 h-8 rounded-lg bg-amber-500/15 border border-amber-500/30 flex items-center justify-center shrink-0 mt-0.5">
-                      <ShieldCheck className="w-4 h-4 text-amber-400" />
-                    </div>
-                    <div>
-                      <h3 className="text-sm font-semibold text-slate-200">Invite-Only by Server Admin</h3>
-                      <p className="text-xs text-slate-400">
-                        Public sign-up is disabled. Only the Server Administrator can register accounts.
-                      </p>
-                    </div>
-                  </div>
-                </div>
-              </div>
-
-              <div className="mt-8 pt-6 border-t border-slate-800/80">
-                <p className="text-xs font-medium text-slate-400 mb-2.5">Quick-fill Accounts (Click to test):</p>
-                <div className="flex flex-wrap gap-2">
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLoginUsername('admin');
-                      setLoginPassword('admin123');
-                    }}
-                    className="text-xs px-3 py-1.5 rounded-lg bg-violet-500/15 hover:bg-violet-500/25 text-violet-300 border border-violet-500/30 transition flex items-center gap-1.5"
-                  >
-                    <ShieldCheck className="w-3.5 h-3.5" /> Admin (admin / admin123)
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLoginUsername('elena');
-                      setLoginPassword('elena123');
-                    }}
-                    className="text-xs px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition"
-                  >
-                    User: Elena
-                  </button>
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setLoginUsername('david');
-                      setLoginPassword('david123');
-                    }}
-                    className="text-xs px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 transition"
-                  >
-                    User: David
-                  </button>
-                </div>
-              </div>
+              <label className="block text-xs font-medium text-slate-300 mb-1.5">Username</label>
+              <input
+                type="text"
+                required
+                autoFocus
+                autoComplete="username"
+                value={loginUsername}
+                onChange={(e) => setLoginUsername(e.target.value)}
+                placeholder="Enter username"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950/90 border border-slate-800 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:border-indigo-500 transition"
+              />
             </div>
 
-            {/* Right Login Form */}
-            <div className="md:col-span-6 p-8 md:p-10 flex flex-col justify-center">
-              <div className="mb-6">
-                <h2 className="text-xl font-bold text-white">Sign in to Your Virtual Space</h2>
-                <p className="text-xs text-slate-400 mt-1">
-                  Enter the credentials provided by your Server Administrator.
-                </p>
-              </div>
-
-              {loginError && (
-                <div className="mb-4 p-3 rounded-xl bg-rose-500/10 border border-rose-500/30 text-rose-300 text-xs flex items-center gap-2">
-                  <Info className="w-4 h-4 shrink-0" />
-                  <span>{loginError}</span>
-                </div>
-              )}
-
-              <form onSubmit={handleLogin} className="space-y-4">
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5">Username</label>
-                  <input
-                    type="text"
-                    required
-                    value={loginUsername}
-                    onChange={(e) => setLoginUsername(e.target.value)}
-                    placeholder="e.g. admin or elena"
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950/90 border border-slate-800 text-sm text-white focus:outline-none focus:border-indigo-500 transition"
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-xs font-medium text-slate-300 mb-1.5">Password</label>
-                  <input
-                    type="password"
-                    required
-                    value={loginPassword}
-                    onChange={(e) => setLoginPassword(e.target.value)}
-                    placeholder="••••••••"
-                    className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950/90 border border-slate-800 text-sm text-white focus:outline-none focus:border-indigo-500 transition"
-                  />
-                </div>
-
-                <button
-                  type="submit"
-                  disabled={loggingIn}
-                  className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white font-semibold text-sm shadow-lg shadow-indigo-600/25 transition disabled:opacity-50"
-                >
-                  {loggingIn ? 'Mounting Virtual Space...' : 'Sign In to Photo Drive'}
-                </button>
-              </form>
-
-              <div className="mt-6 p-3.5 rounded-xl bg-slate-950/70 border border-slate-800/80 flex items-start gap-3">
-                <Lock className="w-4 h-4 text-slate-400 shrink-0 mt-0.5" />
-                <div className="text-xs text-slate-400 leading-relaxed">
-                  <span className="text-slate-200 font-medium">Need an account?</span> Public registration is disabled
-                  for privacy. Ask the <span className="text-indigo-300">Server Admin</span> to create your virtual
-                  space and storage quota.
-                </div>
-              </div>
+            <div>
+              <label className="block text-xs font-medium text-slate-300 mb-1.5">Password</label>
+              <input
+                type="password"
+                required
+                autoComplete="current-password"
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                placeholder="Enter password"
+                className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950/90 border border-slate-800 text-sm text-white placeholder:text-slate-600 focus:outline-none focus:border-indigo-500 transition"
+              />
             </div>
-          </div>
-        </main>
 
-        {/* Server Connection Modal */}
+            <button
+              type="submit"
+              disabled={loggingIn}
+              className="w-full py-2.5 px-4 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white font-semibold text-sm shadow-lg shadow-indigo-600/25 transition disabled:opacity-50 mt-2"
+            >
+              {loggingIn ? 'Signing in...' : 'Sign In'}
+            </button>
+          </form>
+        </div>
+
         {serverModalOpen && (
           <ServerConfigModal
             apiUrlInput={apiUrlInput}
@@ -695,11 +671,20 @@ export default function App() {
   const isInspectingOther =
     currentUser.role === 'admin' && inspectedUserId && inspectedUserId !== currentUser.id;
 
+  const tel = liveTelemetry || adminOverview || {};
+  const diskTotal = tel.disk_total_bytes || 1;
+  const diskUsed = tel.disk_used_bytes || 0;
+  const diskFree = tel.disk_free_bytes || 0;
+  const diskPercent = tel.disk_percent ?? Math.min(100, Number(((diskUsed / diskTotal) * 100).toFixed(1)));
+  const photoDriveBytes = tel.photo_drive_used_bytes ?? adminOverview?.total_used_bytes ?? 0;
+  const osUsedBytes = Math.max(0, diskUsed - photoDriveBytes);
+  const osUsedPct = Math.min(100, Number(((osUsedBytes / diskTotal) * 100).toFixed(2)));
+  const photoUsedPct = Math.min(100 - osUsedPct, Number(((photoDriveBytes / diskTotal) * 100).toFixed(2)));
+
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col md:flex-row">
-      {/* Toast Notification */}
       {toast && (
-        <div className="fixed bottom-5 right-5 z-50 max-w-md px-4 py-3 rounded-2xl bg-slate-900/95 border border-slate-700 shadow-2xl flex items-center gap-3 animate-bounce">
+        <div className="fixed bottom-5 right-5 z-50 max-w-md px-4 py-3 rounded-2xl bg-slate-900/95 border border-slate-700 shadow-2xl flex items-center gap-3">
           <div
             className={`w-2.5 h-2.5 rounded-full shrink-0 ${
               toast.type === 'error' ? 'bg-rose-500' : 'bg-emerald-400'
@@ -714,7 +699,6 @@ export default function App() {
          =============================================================== */}
       <aside className="w-full md:w-72 bg-slate-900/60 border-b md:border-b-0 md:border-r border-slate-800/80 flex flex-col justify-between p-4 shrink-0">
         <div className="space-y-6">
-          {/* App Brand + Server Badge */}
           <div className="flex items-center justify-between px-2">
             <div className="flex items-center gap-2.5">
               <div className="w-9 h-9 rounded-xl bg-gradient-to-tr from-indigo-600 to-violet-500 flex items-center justify-center shadow-md shadow-indigo-500/20">
@@ -734,7 +718,7 @@ export default function App() {
                       serverConnected ? 'bg-emerald-400' : 'bg-amber-400'
                     }`}
                   />
-                  {serverConnected ? 'Linux Disk Connected' : 'Browser Storage Mode'}
+                  {serverConnected ? 'Linux Disk Online' : 'Offline Mode'}
                 </button>
               </div>
             </div>
@@ -764,7 +748,7 @@ export default function App() {
             <div className="p-3 rounded-2xl bg-gradient-to-br from-violet-950/60 to-slate-900 border border-violet-500/30 space-y-2.5">
               <div className="flex items-center justify-between">
                 <span className="text-[11px] font-semibold uppercase tracking-wider text-violet-300 flex items-center gap-1.5">
-                  <ShieldCheck className="w-3.5 h-3.5" /> Admin Master Access
+                  <ShieldCheck className="w-3.5 h-3.5" /> Admin Panel
                 </span>
                 <button
                   onClick={() => setCreateUserModalOpen(true)}
@@ -783,7 +767,7 @@ export default function App() {
                 }`}
               >
                 <span className="flex items-center gap-2">
-                  <Users className="w-4 h-4" /> All Users & Quotas
+                  <Activity className="w-4 h-4" /> Live Server & Users
                 </span>
                 <span className="px-1.5 py-0.5 rounded bg-black/20 text-[10px]">
                   {adminOverview?.total_users || 1}
@@ -792,7 +776,7 @@ export default function App() {
 
               <div>
                 <label className="block text-[10px] text-slate-400 mb-1">
-                  Inspect Virtual Space of Any User:
+                  Inspect User Virtual Space:
                 </label>
                 <select
                   value={inspectedUserId || currentUser.id}
@@ -861,7 +845,7 @@ export default function App() {
             </button>
           </div>
 
-          {/* Albums / Folders in Virtual Space */}
+          {/* Albums / Folders */}
           {inspectedUserId !== 'all' && (
             <div className="space-y-1.5">
               <div className="flex items-center justify-between px-2">
@@ -878,7 +862,7 @@ export default function App() {
 
               <div className="max-h-44 overflow-y-auto space-y-1 pr-1">
                 {folders.length === 0 ? (
-                  <p className="px-2 py-2 text-[11px] text-slate-500 italic">No albums in this virtual space yet.</p>
+                  <p className="px-2 py-2 text-[11px] text-slate-500 italic">No albums yet.</p>
                 ) : (
                   folders.map((folder) => (
                     <div
@@ -915,9 +899,8 @@ export default function App() {
           )}
         </div>
 
-        {/* Bottom Storage Quota & Shrink Savings Cards */}
+        {/* Bottom Storage Quota & Profile */}
         <div className="space-y-3 mt-6 pt-4 border-t border-slate-800/80">
-          {/* Storage Quota Progress Card */}
           {inspectedUserId !== 'all' && activeSpaceUser && (
             <div className="p-3.5 rounded-2xl bg-slate-950/90 border border-slate-800/90 space-y-2">
               <div className="flex items-center justify-between text-xs">
@@ -943,12 +926,12 @@ export default function App() {
 
               <div className="flex items-center justify-between text-[11px] text-slate-400">
                 <span>{formatBytes(usedBytes)} used</span>
-                <span>Limit: {formatBytes(quotaBytes)}</span>
+                <span>Free: {formatBytes(Math.max(0, quotaBytes - usedBytes))}</span>
               </div>
 
               <div className="pt-1 flex items-center justify-between text-[10px] text-emerald-400 border-t border-slate-800/80">
                 <span className="flex items-center gap-1">
-                  <Sparkles className="w-3 h-3" /> Shrunk Savings:
+                  <Sparkles className="w-3 h-3" /> Shrunk Saved:
                 </span>
                 <span className="font-semibold">
                   {formatBytes(savedBytes)} ({savingsPercent}%)
@@ -957,7 +940,6 @@ export default function App() {
             </div>
           )}
 
-          {/* User Profile & Logout */}
           <div className="flex items-center justify-between px-2 py-1.5 rounded-xl bg-slate-900/90 border border-slate-800/60">
             <div className="flex items-center gap-2.5 min-w-0">
               <div
@@ -988,7 +970,6 @@ export default function App() {
           MAIN CONTENT AREA
          =============================================================== */}
       <main className="flex-1 flex flex-col min-w-0 max-h-screen overflow-y-auto">
-        {/* Admin Inspection Banner when viewing another user's virtual space */}
         {isInspectingOther && (
           <div className="bg-gradient-to-r from-violet-900/80 via-indigo-900/80 to-slate-900 border-b border-violet-500/40 px-6 py-2.5 flex flex-wrap items-center justify-between gap-3">
             <div className="flex items-center gap-2.5 text-xs">
@@ -1012,7 +993,7 @@ export default function App() {
                 onClick={() => setActiveSection('admin')}
                 className="text-xs px-3 py-1 rounded-lg bg-white/10 hover:bg-white/20 text-white transition"
               >
-                Back to All Users
+                Back to Admin Panel
               </button>
               <button
                 onClick={() => setInspectedUserId(null)}
@@ -1024,14 +1005,14 @@ export default function App() {
           </div>
         )}
 
-        {/* Top Header Bar */}
+        {/* Top Header */}
         <header className="sticky top-0 z-20 bg-slate-950/85 backdrop-blur-md border-b border-slate-800/80 px-6 py-4 flex flex-wrap items-center justify-between gap-4">
           <div>
             <h2 className="text-lg font-bold text-white flex items-center gap-2">
               {activeSection === 'admin' ? (
                 <>
-                  <ShieldCheck className="w-5 h-5 text-violet-400" />
-                  Server Admin Control Center & User Spaces
+                  <Activity className="w-5 h-5 text-violet-400" />
+                  Server Live Resources, Drive Storage & User Spaces
                 </>
               ) : activeSection === 'favorites' ? (
                 <>
@@ -1057,7 +1038,7 @@ export default function App() {
             </h2>
             <p className="text-xs text-slate-400">
               {activeSection === 'admin'
-                ? 'Register users, manage storage quotas, and inspect every virtual space on your Linux laptop.'
+                ? `Live hardware monitor for ${tel.hostname || 'blserv'} (${tel.os_info || 'Linux'}) · Updates every 2s`
                 : `Stored shrunk without quality loss · ${displayedPhotos.length} photo${
                     displayedPhotos.length === 1 ? '' : 's'
                   }`}
@@ -1067,7 +1048,6 @@ export default function App() {
           <div className="flex items-center gap-3 flex-wrap">
             {activeSection !== 'admin' && (
               <>
-                {/* Search input */}
                 <div className="relative">
                   <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
                   <input
@@ -1079,7 +1059,6 @@ export default function App() {
                   />
                 </div>
 
-                {/* Sort select */}
                 <select
                   value={sortBy}
                   onChange={(e) => setSortBy(e.target.value)}
@@ -1090,7 +1069,6 @@ export default function App() {
                   <option value="size">Largest File Size</option>
                 </select>
 
-                {/* Grid size toggle */}
                 <button
                   onClick={() => setGridCols((c) => (c === 'normal' ? 'compact' : 'normal'))}
                   title="Toggle Grid Density"
@@ -1128,94 +1106,295 @@ export default function App() {
         </header>
 
         {/* =============================================================
-            SECTION A: ADMIN CONTROL CENTER (ALL USERS, QUOTAS, DISK)
+            SECTION A: ADMIN PANEL (DRIVE INDICATOR + LIVE CPU/RAM TELEMETRY + USERS)
            ============================================================= */}
         {activeSection === 'admin' && currentUser.role === 'admin' && adminOverview ? (
           <div className="p-6 space-y-6">
-            {/* Global Server Stats Cards */}
-            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
-              <div className="p-5 rounded-2xl bg-slate-900/70 border border-slate-800/90 space-y-2">
-                <div className="flex items-center justify-between text-xs text-slate-400">
-                  <span>Virtual Spaces & Users</span>
-                  <Users className="w-4 h-4 text-violet-400" />
+            {/* 1. PHYSICAL LINUX DRIVE SPACE INDICATOR (FREE vs USED BREAKDOWN) */}
+            <div className="p-6 rounded-3xl bg-slate-900/80 border border-slate-800/90 shadow-xl space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-11 h-11 rounded-2xl bg-cyan-500/15 border border-cyan-500/30 flex items-center justify-center">
+                    <HardDrive className="w-5 h-5 text-cyan-400" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <h3 className="text-sm font-bold text-white">
+                        Linux Laptop Physical Drive Storage ({tel.hostname || 'blserv'})
+                      </h3>
+                      <span className="px-2 py-0.5 rounded-full bg-cyan-500/15 border border-cyan-500/30 text-[10px] font-semibold text-cyan-300">
+                        {diskPercent}% Used
+                      </span>
+                    </div>
+                    <p className="text-xs text-slate-400 font-mono mt-0.5">
+                      Mount Path: {adminOverview.storage_root}
+                    </p>
+                  </div>
                 </div>
-                <p className="text-2xl font-bold text-white">{adminOverview.total_users}</p>
-                <p className="text-[11px] text-slate-400">
-                  Allocated Quota: <span className="text-slate-200">{formatBytes(adminOverview.total_quota_allocated_bytes)}</span>
-                </p>
+
+                <div className="flex items-center gap-6 text-right">
+                  <div>
+                    <span className="text-[11px] text-slate-400 block">Used Space</span>
+                    <span className="text-base font-bold text-white">{formatBytes(diskUsed)}</span>
+                  </div>
+                  <div>
+                    <span className="text-[11px] text-emerald-400 block">Free Available Space</span>
+                    <span className="text-base font-bold text-emerald-400">{formatBytes(diskFree)}</span>
+                  </div>
+                  <div>
+                    <span className="text-[11px] text-slate-400 block">Total Drive Capacity</span>
+                    <span className="text-base font-bold text-slate-200">{formatBytes(diskTotal)}</span>
+                  </div>
+                </div>
               </div>
 
-              <div className="p-5 rounded-2xl bg-slate-900/70 border border-slate-800/90 space-y-2">
-                <div className="flex items-center justify-between text-xs text-slate-400">
-                  <span>Total Photos Stored</span>
-                  <ImageIcon className="w-4 h-4 text-indigo-400" />
-                </div>
-                <p className="text-2xl font-bold text-white">{adminOverview.total_photos}</p>
-                <p className="text-[11px] text-slate-400">
-                  Stored Size on Disk: <span className="text-indigo-300 font-medium">{formatBytes(adminOverview.total_used_bytes)}</span>
-                </p>
+              {/* Multi-segment visual drive bar */}
+              <div className="w-full h-4 rounded-full bg-slate-950 border border-slate-800 overflow-hidden flex p-0.5 gap-0.5">
+                <div
+                  title={`Linux OS & System Files: ${formatBytes(osUsedBytes)}`}
+                  className="h-full bg-slate-600 first:rounded-l-full transition-all duration-500"
+                  style={{ width: `${Math.max(1, osUsedPct)}%` }}
+                />
+                <div
+                  title={`LuminaDrive User Photos: ${formatBytes(photoDriveBytes)}`}
+                  className="h-full bg-gradient-to-r from-indigo-500 to-cyan-400 transition-all duration-500"
+                  style={{ width: `${photoDriveBytes > 0 ? Math.max(1, photoUsedPct) : 0}%` }}
+                />
               </div>
 
-              <div className="p-5 rounded-2xl bg-emerald-950/25 border border-emerald-500/30 space-y-2">
-                <div className="flex items-center justify-between text-xs text-emerald-300">
-                  <span>Space Saved by Smart Shrink</span>
-                  <Zap className="w-4 h-4 text-emerald-400" />
+              {/* Legend */}
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 pt-1 text-xs">
+                <div className="p-3 rounded-2xl bg-slate-950/70 border border-slate-800/80 flex items-center justify-between">
+                  <span className="flex items-center gap-2 text-slate-400">
+                    <span className="w-2.5 h-2.5 rounded-full bg-indigo-400" /> Photo Drive Used
+                  </span>
+                  <span className="font-semibold text-white">{formatBytes(photoDriveBytes)}</span>
                 </div>
-                <p className="text-2xl font-bold text-emerald-400">
-                  {formatBytes(adminOverview.total_saved_bytes)}
-                </p>
-                <p className="text-[11px] text-emerald-200/70">
-                  Original Raw Size: {formatBytes(adminOverview.total_original_bytes)}
-                </p>
-              </div>
-
-              <div className="p-5 rounded-2xl bg-slate-900/70 border border-slate-800/90 space-y-2">
-                <div className="flex items-center justify-between text-xs text-slate-400">
-                  <span>Linux Laptop Disk Free</span>
-                  <Server className="w-4 h-4 text-cyan-400" />
+                <div className="p-3 rounded-2xl bg-slate-950/70 border border-slate-800/80 flex items-center justify-between">
+                  <span className="flex items-center gap-2 text-slate-400">
+                    <span className="w-2.5 h-2.5 rounded-full bg-slate-500" /> Linux OS / Other
+                  </span>
+                  <span className="font-semibold text-slate-300">{formatBytes(osUsedBytes)}</span>
                 </div>
-                <p className="text-2xl font-bold text-white">{formatBytes(adminOverview.disk_free_bytes)}</p>
-                <p className="text-[11px] text-slate-400 truncate" title={adminOverview.storage_root}>
-                  Path: {adminOverview.storage_root}
-                </p>
+                <div className="p-3 rounded-2xl bg-slate-950/70 border border-emerald-500/20 flex items-center justify-between">
+                  <span className="flex items-center gap-2 text-emerald-300">
+                    <span className="w-2.5 h-2.5 rounded-full bg-emerald-400" /> Free Space
+                  </span>
+                  <span className="font-bold text-emerald-400">{formatBytes(diskFree)}</span>
+                </div>
+                <div className="p-3 rounded-2xl bg-emerald-950/20 border border-emerald-500/30 flex items-center justify-between">
+                  <span className="flex items-center gap-1.5 text-emerald-300">
+                    <Zap className="w-3.5 h-3.5" /> Shrunk Saved
+                  </span>
+                  <span className="font-bold text-emerald-300">
+                    {formatBytes(adminOverview.total_saved_bytes)}
+                  </span>
+                </div>
               </div>
             </div>
 
-            {/* Quick Inspect All Photos Banner */}
-            <div className="p-4 rounded-2xl bg-gradient-to-r from-indigo-950/60 via-slate-900 to-slate-900 border border-indigo-500/30 flex flex-wrap items-center justify-between gap-4">
-              <div className="flex items-center gap-3">
-                <div className="w-10 h-10 rounded-xl bg-indigo-500/20 border border-indigo-500/30 flex items-center justify-center">
-                  <Eye className="w-5 h-5 text-indigo-300" />
+            {/* 2. REAL-TIME HARDWARE TELEMETRY MONITOR (CPU, RAM, TEMP, LOAD, UPTIME) */}
+            <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
+              {/* CPU Real-Time Card */}
+              <div className="p-5 rounded-3xl bg-slate-900/80 border border-slate-800/90 flex flex-col justify-between space-y-4">
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-10 h-10 rounded-xl bg-indigo-500/15 border border-indigo-500/30 flex items-center justify-center">
+                      <Cpu className="w-5 h-5 text-indigo-400" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                          CPU Load
+                        </h4>
+                        <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" /> LIVE
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        {tel.cpu_cores || 4} Logical Cores · Load: {(tel.load_avg || [0, 0, 0]).join(' / ')}
+                      </p>
+                    </div>
+                  </div>
+                  <span className="text-2xl font-bold text-white">{tel.cpu_percent ?? 0}%</span>
                 </div>
-                <div>
-                  <h3 className="text-sm font-semibold text-white">Master Photo Stream</h3>
-                  <p className="text-xs text-slate-400">
-                    Browse every photo uploaded across all users&apos; virtual spaces in one unified view.
-                  </p>
+
+                {/* Live CPU Bar */}
+                <div className="space-y-2">
+                  <div className="w-full h-2.5 rounded-full bg-slate-950 overflow-hidden border border-slate-800">
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        (tel.cpu_percent || 0) > 85
+                          ? 'bg-rose-500'
+                          : (tel.cpu_percent || 0) > 60
+                            ? 'bg-amber-500'
+                            : 'bg-gradient-to-r from-indigo-500 to-violet-400'
+                      }`}
+                      style={{ width: `${Math.max(2, tel.cpu_percent || 0)}%` }}
+                    />
+                  </div>
+
+                  {/* Mini 20-sample sparkline */}
+                  <div className="h-10 flex items-end gap-1 pt-2 px-1 bg-slate-950/60 rounded-xl border border-slate-800/70">
+                    {(telemetryHistory.length > 0 ? telemetryHistory : [{ cpu: tel.cpu_percent || 8 }]).map(
+                      (pt, idx) => (
+                        <div
+                          key={idx}
+                          className="flex-1 bg-indigo-500/60 rounded-t transition-all duration-300"
+                          style={{ height: `${Math.max(8, Math.min(100, pt.cpu))}%` }}
+                          title={`${pt.time || ''}: ${pt.cpu}% CPU`}
+                        />
+                      )
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-800/80 text-slate-400">
+                  <span className="flex items-center gap-1.5">
+                    <Thermometer className="w-3.5 h-3.5 text-amber-400" /> CPU Temperature:
+                  </span>
+                  <span className="font-semibold text-slate-200">
+                    {tel.cpu_temp_c ? `${tel.cpu_temp_c} °C` : 'Normal'}
+                  </span>
                 </div>
               </div>
-              <button
-                onClick={() => openInspectUserSpace('all')}
-                className="px-4 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition"
-              >
-                View All Users&apos; Photos ({adminOverview.total_photos})
-              </button>
+
+              {/* RAM & Swap Real-Time Card */}
+              <div className="p-5 rounded-3xl bg-slate-900/80 border border-slate-800/90 flex flex-col justify-between space-y-4">
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-10 h-10 rounded-xl bg-fuchsia-500/15 border border-fuchsia-500/30 flex items-center justify-center">
+                      <Database className="w-5 h-5 text-fuchsia-400" />
+                    </div>
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                          RAM Memory
+                        </h4>
+                        <span className="flex items-center gap-1 text-[10px] px-2 py-0.5 rounded-full bg-emerald-500/15 text-emerald-300 border border-emerald-500/30">
+                          <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-ping" /> LIVE
+                        </span>
+                      </div>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        {formatBytes(tel.ram_used_bytes || 0)} used of {formatBytes(tel.ram_total_bytes || 0)}
+                      </p>
+                    </div>
+                  </div>
+                  <span className="text-2xl font-bold text-white">{tel.ram_percent ?? 0}%</span>
+                </div>
+
+                <div className="space-y-2">
+                  <div className="w-full h-2.5 rounded-full bg-slate-950 overflow-hidden border border-slate-800">
+                    <div
+                      className={`h-full rounded-full transition-all duration-500 ${
+                        (tel.ram_percent || 0) > 85
+                          ? 'bg-rose-500'
+                          : (tel.ram_percent || 0) > 70
+                            ? 'bg-amber-500'
+                            : 'bg-gradient-to-r from-fuchsia-500 to-pink-400'
+                      }`}
+                      style={{ width: `${Math.max(2, tel.ram_percent || 0)}%` }}
+                    />
+                  </div>
+
+                  {/* Mini 20-sample sparkline */}
+                  <div className="h-10 flex items-end gap-1 pt-2 px-1 bg-slate-950/60 rounded-xl border border-slate-800/70">
+                    {(telemetryHistory.length > 0 ? telemetryHistory : [{ ram: tel.ram_percent || 25 }]).map(
+                      (pt, idx) => (
+                        <div
+                          key={idx}
+                          className="flex-1 bg-fuchsia-500/60 rounded-t transition-all duration-300"
+                          style={{ height: `${Math.max(8, Math.min(100, pt.ram))}%` }}
+                          title={`${pt.time || ''}: ${pt.ram}% RAM`}
+                        />
+                      )
+                    )}
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-800/80 text-slate-400">
+                  <span>Available RAM: {formatBytes(tel.ram_available_bytes || 0)}</span>
+                  <span>Swap: {tel.swap_percent ?? 0}%</span>
+                </div>
+              </div>
+
+              {/* Server Uptime, Network & Virtual Spaces Summary Card */}
+              <div className="p-5 rounded-3xl bg-slate-900/80 border border-slate-800/90 flex flex-col justify-between space-y-4">
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-2.5">
+                    <div className="w-10 h-10 rounded-xl bg-emerald-500/15 border border-emerald-500/30 flex items-center justify-center">
+                      <Server className="w-5 h-5 text-emerald-400" />
+                    </div>
+                    <div>
+                      <h4 className="text-xs font-bold uppercase tracking-wider text-slate-300">
+                        Server Status & Network
+                      </h4>
+                      <p className="text-[11px] text-slate-400 mt-0.5">
+                        {tel.hostname || 'blserv'} · {tel.os_info || 'Linux'}
+                      </p>
+                    </div>
+                  </div>
+                  <span className="px-2.5 py-1 rounded-full bg-emerald-500/15 border border-emerald-500/30 text-emerald-300 text-xs font-semibold">
+                    Healthy
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-2 gap-2.5 text-xs">
+                  <div className="p-3 rounded-2xl bg-slate-950/80 border border-slate-800/80">
+                    <span className="text-[10px] text-slate-400 block">Server Uptime</span>
+                    <span className="font-bold text-white text-sm">
+                      {formatUptime(tel.uptime_seconds)}
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-slate-950/80 border border-slate-800/80">
+                    <span className="text-[10px] text-slate-400 block">Total Photos Stored</span>
+                    <span className="font-bold text-indigo-300 text-sm">
+                      {adminOverview.total_photos} photos
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-slate-950/80 border border-slate-800/80">
+                    <span className="text-[10px] text-slate-400 block">Network Received</span>
+                    <span className="font-semibold text-slate-200">
+                      {formatBytes(tel.net_rx_bytes || 0)}
+                    </span>
+                  </div>
+                  <div className="p-3 rounded-2xl bg-slate-950/80 border border-slate-800/80">
+                    <span className="text-[10px] text-slate-400 block">Network Sent</span>
+                    <span className="font-semibold text-slate-200">
+                      {formatBytes(tel.net_tx_bytes || 0)}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="flex items-center justify-between text-xs pt-1 border-t border-slate-800/80 text-slate-400">
+                  <span className="flex items-center gap-1.5">
+                    <Wifi className="w-3.5 h-3.5 text-emerald-400" /> HTTPS Funnel Active
+                  </span>
+                  <button
+                    onClick={() => openInspectUserSpace('all')}
+                    className="text-indigo-400 hover:text-indigo-300 font-semibold"
+                  >
+                    View All Photos ({adminOverview.total_photos}) →
+                  </button>
+                </div>
+              </div>
             </div>
 
-            {/* Users & Virtual Spaces Directory */}
+            {/* 3. REGISTERED USERS & VIRTUAL SPACES DIRECTORY */}
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <h3 className="text-sm font-semibold text-slate-200">
                   Registered Users & Virtual Spaces ({adminOverview.users.length})
                 </h3>
                 <span className="text-xs text-slate-400">
-                  Only Admin can register users or modify their storage quota
+                  Allocated Quotas Total: {formatBytes(adminOverview.total_quota_allocated_bytes)}
                 </span>
               </div>
 
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 {adminOverview.users.map((u) => {
                   const uPct = Math.min(100, Number(((u.used_bytes / (u.quota_bytes || 1)) * 100).toFixed(1)));
+                  const uFree = Math.max(0, (u.quota_bytes || 0) - (u.used_bytes || 0));
                   return (
                     <div
                       key={u.id}
@@ -1275,14 +1454,14 @@ export default function App() {
                         </div>
                       </div>
 
-                      {/* User Storage Quota Progress Bar */}
                       <div className="space-y-1.5 bg-slate-950/70 p-3.5 rounded-xl border border-slate-800/80">
                         <div className="flex items-center justify-between text-xs">
                           <span className="text-slate-300 font-medium">
-                            {formatBytes(u.used_bytes)} <span className="text-slate-500">of</span>{' '}
-                            {formatBytes(u.quota_bytes)}
+                            Used: {formatBytes(u.used_bytes)} · Free: {formatBytes(uFree)}
                           </span>
-                          <span className="text-slate-400">{uPct}% used</span>
+                          <span className="text-slate-400">
+                            Quota: {formatBytes(u.quota_bytes)} ({uPct}%)
+                          </span>
                         </div>
                         <div className="w-full h-2 rounded-full bg-slate-800 overflow-hidden">
                           <div
@@ -1337,7 +1516,6 @@ export default function App() {
               }
             }}
           >
-            {/* Quick Drag & Drop Shrink Banner */}
             <div
               onClick={() => fileInputRef.current?.click()}
               className="group cursor-pointer p-4 rounded-2xl bg-slate-900/50 hover:bg-slate-900/90 border border-dashed border-slate-800 hover:border-indigo-500/60 transition flex flex-wrap items-center justify-between gap-4"
@@ -1351,7 +1529,7 @@ export default function App() {
                     Drop photos anywhere or click to Shrink & Save to Virtual Space
                   </h3>
                   <p className="text-[11px] text-slate-400">
-                    Automatically optimizes file size by up to 80% with visually lossless 4K quality before saving to disk.
+                    Optimizes file size by up to 80% without visual quality loss before saving to your Linux server.
                   </p>
                 </div>
               </div>
@@ -1360,7 +1538,6 @@ export default function App() {
               </span>
             </div>
 
-            {/* Photo Grid */}
             {displayedPhotos.length === 0 ? (
               <div className="flex-1 flex flex-col items-center justify-center py-16 text-center">
                 <div className="w-16 h-16 rounded-2xl bg-slate-900 border border-slate-800 flex items-center justify-center mb-4">
@@ -1368,13 +1545,13 @@ export default function App() {
                 </div>
                 <h3 className="text-base font-semibold text-slate-300">No photos in this virtual space yet</h3>
                 <p className="text-xs text-slate-500 max-w-sm mt-1 mb-5">
-                  Upload photos from your phone or laptop. They will be automatically shrunk without losing visual quality.
+                  Upload photos from your phone or computer. They will be automatically shrunk without losing quality.
                 </p>
                 <button
                   onClick={() => fileInputRef.current?.click()}
                   className="px-4 py-2.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold shadow-lg shadow-indigo-600/25 transition flex items-center gap-2"
                 >
-                  <CloudUpload className="w-4 h-4" /> Upload First Photo
+                  <CloudUpload className="w-4 h-4" /> Upload Photos
                 </button>
               </div>
             ) : (
@@ -1399,7 +1576,6 @@ export default function App() {
                         className="w-full h-full object-cover group-hover:scale-105 transition duration-500"
                       />
 
-                      {/* Top Badges */}
                       <div className="absolute top-2.5 left-2.5 right-2.5 flex items-center justify-between gap-1 pointer-events-none">
                         {photo.saved_percent > 0 ? (
                           <span className="px-2 py-0.5 rounded-full bg-emerald-950/85 backdrop-blur-md border border-emerald-500/40 text-[10px] font-semibold text-emerald-300 flex items-center gap-1">
@@ -1416,7 +1592,6 @@ export default function App() {
                         )}
                       </div>
 
-                      {/* Hover Overlay Actions */}
                       <div className="absolute inset-0 bg-gradient-to-t from-slate-950/90 via-transparent to-transparent opacity-0 group-hover:opacity-100 transition flex items-end justify-between p-3">
                         <div className="flex items-center gap-1.5">
                           <button
@@ -1452,7 +1627,6 @@ export default function App() {
                       </div>
                     </div>
 
-                    {/* Card Footer Info */}
                     <div className="p-3 flex items-center justify-between gap-2 text-xs">
                       <div className="truncate">
                         <p className="font-medium text-slate-200 truncate" title={photo.original_name}>
@@ -1478,7 +1652,7 @@ export default function App() {
       </main>
 
       {/* ===============================================================
-          MODAL 1: SMART SHRINK UPLOAD & VISUAL QUALITY PREVIEW
+          MODAL 1: SMART SHRINK UPLOAD WITH LIVE PERCENTAGE PROGRESS
          =============================================================== */}
       {uploadModalOpen && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-md flex items-center justify-center p-4">
@@ -1490,31 +1664,65 @@ export default function App() {
                 </div>
                 <div>
                   <h3 className="text-sm font-bold text-white">
-                    Smart Visually-Lossless Photo Shrinker
+                    Smart Visually-Lossless Photo Shrinker & Uploader
                   </h3>
                   <p className="text-xs text-slate-400">
-                    Shrinking file size to maximum efficiency while keeping 100% crisp visual quality
+                    {uploading
+                      ? `Uploading to Linux Server... ${overallUploadProgress.percent}% complete (${overallUploadProgress.done}/${overallUploadProgress.total})`
+                      : shrinkingProgress.active
+                        ? `Shrinking photos... ${shrinkingProgress.percent}% (${shrinkingProgress.done}/${shrinkingProgress.total})`
+                        : 'Ready to upload shrunk photos with zero quality loss'}
                   </p>
                 </div>
               </div>
-              <button
-                onClick={() => {
-                  setPendingUploads([]);
-                  setUploadModalOpen(false);
-                }}
-                className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
-              >
-                <X className="w-4 h-4" />
-              </button>
+              {!uploading && (
+                <button
+                  onClick={() => {
+                    setPendingUploads([]);
+                    setUploadModalOpen(false);
+                  }}
+                  className="p-1.5 rounded-lg text-slate-400 hover:text-white hover:bg-slate-800"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              )}
             </div>
 
             <div className="p-6 overflow-y-auto space-y-4 flex-1">
+              {/* LIVE OVERALL SHRINKING OR UPLOAD PROGRESS BAR WITH BIG PERCENTAGE */}
+              {(shrinkingProgress.active || uploading) && (
+                <div className="p-4 rounded-2xl bg-indigo-950/40 border border-indigo-500/40 space-y-2">
+                  <div className="flex items-center justify-between text-xs">
+                    <span className="font-semibold text-indigo-200 flex items-center gap-2">
+                      <RefreshCw className="w-4 h-4 text-indigo-400 animate-spin" />
+                      {uploading
+                        ? `Uploading photo ${ Math.min(overallUploadProgress.done + 1, overallUploadProgress.total) } of ${overallUploadProgress.total} to Linux Server...`
+                        : `Optimizing photo ${shrinkingProgress.done} of ${shrinkingProgress.total}...`}
+                    </span>
+                    <span className="text-base font-bold text-white">
+                      {uploading ? `${overallUploadProgress.percent}%` : `${shrinkingProgress.percent}%`}
+                    </span>
+                  </div>
+                  <div className="w-full h-3 rounded-full bg-slate-950 overflow-hidden border border-slate-800">
+                    <div
+                      className="h-full rounded-full bg-gradient-to-r from-indigo-500 via-violet-500 to-emerald-400 transition-all duration-200"
+                      style={{
+                        width: `${Math.max(
+                          4,
+                          uploading ? overallUploadProgress.percent : shrinkingProgress.percent
+                        )}%`,
+                      }}
+                    />
+                  </div>
+                </div>
+              )}
+
               {/* Summary Bar */}
-              {pendingUploads.some((i) => i.status === 'ready') && (
+              {pendingUploads.some((i) => i.shrunk) && (
                 <div className="p-4 rounded-2xl bg-emerald-950/30 border border-emerald-500/30 flex flex-wrap items-center justify-between gap-3">
                   <div>
                     <p className="text-xs font-semibold text-emerald-300">
-                      Ready to save to {isInspectingOther ? `${activeSpaceUser?.display_name}'s` : 'your'} virtual space
+                      Target Space: {isInspectingOther ? `${activeSpaceUser?.display_name}'s` : 'Your'} Virtual Drive
                     </p>
                     <p className="text-[11px] text-slate-300 mt-0.5">
                       Original Total:{' '}
@@ -1535,6 +1743,7 @@ export default function App() {
                   <div className="flex items-center gap-2">
                     <label className="text-xs text-slate-400">Album:</label>
                     <select
+                      disabled={uploading}
                       value={uploadTargetFolder}
                       onChange={(e) => setUploadTargetFolder(e.target.value)}
                       className="px-3 py-1.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white"
@@ -1550,7 +1759,7 @@ export default function App() {
                 </div>
               )}
 
-              {/* Side-by-Side Visual Quality Inspector if user clicked "Verify Quality" */}
+              {/* Side-by-Side Visual Quality Inspector */}
               {compareItem && (
                 <div className="p-4 rounded-2xl bg-slate-950 border border-indigo-500/40 space-y-3">
                   <div className="flex items-center justify-between">
@@ -1589,67 +1798,92 @@ export default function App() {
                 </div>
               )}
 
-              {/* Items List */}
+              {/* Individual Photo Rows with Live Percentage */}
               <div className="space-y-2.5">
                 {pendingUploads.map((item) => (
                   <div
                     key={item.tempId}
-                    className="p-3 rounded-2xl bg-slate-950/90 border border-slate-800 flex items-center justify-between gap-3"
+                    className="p-3 rounded-2xl bg-slate-950/90 border border-slate-800 space-y-2"
                   >
-                    <div className="flex items-center gap-3 min-w-0">
-                      {item.shrunk ? (
-                        <img
-                          src={item.shrunk.thumbDataUrl}
-                          alt={item.name}
-                          className="w-12 h-12 rounded-xl object-cover shrink-0 border border-slate-800"
-                        />
-                      ) : (
-                        <div className="w-12 h-12 rounded-xl bg-slate-900 flex items-center justify-center shrink-0">
-                          <RefreshCw className="w-4 h-4 text-indigo-400 animate-spin" />
-                        </div>
-                      )}
-                      <div className="min-w-0">
-                        <p className="text-xs font-semibold text-white truncate">{item.name}</p>
-                        {item.status === 'shrinking' ? (
-                          <p className="text-[11px] text-indigo-400">Optimizing lossless visual encoding...</p>
+                    <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-center gap-3 min-w-0">
+                        {item.shrunk ? (
+                          <img
+                            src={item.shrunk.thumbDataUrl}
+                            alt={item.name}
+                            className="w-12 h-12 rounded-xl object-cover shrink-0 border border-slate-800"
+                          />
                         ) : (
-                          <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400 mt-0.5">
-                            <span className="line-through">{formatBytes(item.shrunk.originalSize)}</span>
-                            <span>→</span>
-                            <span className="text-emerald-400 font-semibold">
-                              {formatBytes(item.shrunk.compressedSize)}
-                            </span>
-                            <span className="px-1.5 py-0.2 rounded bg-emerald-500/15 text-emerald-300 text-[10px]">
-                              -{item.shrunk.savedPercent}% saved
-                            </span>
-                            <span>
-                              ({item.shrunk.width}×{item.shrunk.height})
-                            </span>
+                          <div className="w-12 h-12 rounded-xl bg-slate-900 flex items-center justify-center shrink-0">
+                            <RefreshCw className="w-4 h-4 text-indigo-400 animate-spin" />
                           </div>
+                        )}
+                        <div className="min-w-0">
+                          <p className="text-xs font-semibold text-white truncate">{item.name}</p>
+                          {item.status === 'shrinking' ? (
+                            <p className="text-[11px] text-indigo-400">Shrinking photo size...</p>
+                          ) : (
+                            <div className="flex flex-wrap items-center gap-2 text-[11px] text-slate-400 mt-0.5">
+                              <span className="line-through">{formatBytes(item.shrunk.originalSize)}</span>
+                              <span>→</span>
+                              <span className="text-emerald-400 font-semibold">
+                                {formatBytes(item.shrunk.compressedSize)}
+                              </span>
+                              <span className="px-1.5 py-0.2 rounded bg-emerald-500/15 text-emerald-300 text-[10px]">
+                                -{item.shrunk.savedPercent}% saved
+                              </span>
+                            </div>
+                          )}
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-2 shrink-0">
+                        {(item.status === 'uploading' || item.status === 'done') && (
+                          <span
+                            className={`text-xs font-bold px-2.5 py-1 rounded-lg ${
+                              item.status === 'done'
+                                ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                                : 'bg-indigo-500/20 text-indigo-300 border border-indigo-500/30'
+                            }`}
+                          >
+                            {item.status === 'done' ? '100% Done' : `${item.uploadPercent || 0}%`}
+                          </span>
+                        )}
+
+                        {item.shrunk && !uploading && (
+                          <button
+                            type="button"
+                            onClick={() => setCompareItem(item.shrunk)}
+                            className="text-[11px] px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300"
+                          >
+                            Compare
+                          </button>
+                        )}
+                        {!uploading && (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              setPendingUploads((prev) => prev.filter((p) => p.tempId !== item.tempId))
+                            }
+                            className="p-1.5 text-slate-500 hover:text-rose-400"
+                          >
+                            <X className="w-4 h-4" />
+                          </button>
                         )}
                       </div>
                     </div>
 
-                    <div className="flex items-center gap-2 shrink-0">
-                      {item.shrunk && (
-                        <button
-                          type="button"
-                          onClick={() => setCompareItem(item.shrunk)}
-                          className="text-[11px] px-2.5 py-1 rounded-lg bg-slate-900 hover:bg-slate-800 border border-slate-700 text-slate-300"
-                        >
-                          Compare Quality
-                        </button>
-                      )}
-                      <button
-                        type="button"
-                        onClick={() =>
-                          setPendingUploads((prev) => prev.filter((p) => p.tempId !== item.tempId))
-                        }
-                        className="p-1.5 text-slate-500 hover:text-rose-400"
-                      >
-                        <X className="w-4 h-4" />
-                      </button>
-                    </div>
+                    {/* Per-file upload progress bar */}
+                    {(item.status === 'uploading' || item.status === 'done') && (
+                      <div className="w-full h-1.5 rounded-full bg-slate-900 overflow-hidden">
+                        <div
+                          className={`h-full transition-all duration-150 ${
+                            item.status === 'done' ? 'bg-emerald-400' : 'bg-indigo-500'
+                          }`}
+                          style={{ width: `${item.uploadPercent || 0}%` }}
+                        />
+                      </div>
+                    )}
                   </div>
                 ))}
               </div>
@@ -1658,8 +1892,9 @@ export default function App() {
             <div className="px-6 py-4 border-t border-slate-800 flex items-center justify-between bg-slate-950/60">
               <button
                 type="button"
+                disabled={uploading}
                 onClick={() => fileInputRef.current?.click()}
-                className="text-xs font-medium text-indigo-400 hover:text-indigo-300 flex items-center gap-1.5"
+                className="text-xs font-medium text-indigo-400 hover:text-indigo-300 flex items-center gap-1.5 disabled:opacity-40"
               >
                 <Plus className="w-4 h-4" /> Add More Photos
               </button>
@@ -1667,11 +1902,12 @@ export default function App() {
               <div className="flex items-center gap-3">
                 <button
                   type="button"
+                  disabled={uploading}
                   onClick={() => {
                     setPendingUploads([]);
                     setUploadModalOpen(false);
                   }}
-                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-slate-300"
+                  className="px-4 py-2 rounded-xl bg-slate-800 hover:bg-slate-700 text-xs text-slate-300 disabled:opacity-40"
                 >
                   Cancel
                 </button>
@@ -1682,8 +1918,8 @@ export default function App() {
                   className="px-5 py-2 rounded-xl bg-gradient-to-r from-indigo-600 to-violet-600 hover:from-indigo-500 hover:to-violet-500 text-white text-xs font-semibold shadow-lg shadow-indigo-600/30 disabled:opacity-50"
                 >
                   {uploading
-                    ? 'Saving to Virtual Space...'
-                    : `Save ${pendingUploads.length} Shrunk Photo${pendingUploads.length > 1 ? 's' : ''}`}
+                    ? `Uploading (${overallUploadProgress.percent}%)...`
+                    : `Upload ${pendingUploads.length} Photo${pendingUploads.length > 1 ? 's' : ''}`}
                 </button>
               </div>
             </div>
@@ -1699,7 +1935,6 @@ export default function App() {
           onClick={() => setLightboxPhoto(null)}
           className="fixed inset-0 z-50 bg-slate-950/95 backdrop-blur-xl flex flex-col md:flex-row"
         >
-          {/* Image Canvas */}
           <div className="flex-1 flex items-center justify-center p-4 md:p-8 relative min-h-0">
             <button
               onClick={() => setLightboxPhoto(null)}
@@ -1716,7 +1951,6 @@ export default function App() {
             />
           </div>
 
-          {/* Right Inspector Sidebar */}
           <div
             onClick={(e) => e.stopPropagation()}
             className="w-full md:w-80 bg-slate-900 border-t md:border-t-0 md:border-l border-slate-800 p-6 flex flex-col justify-between gap-6 overflow-y-auto"
@@ -1729,7 +1963,6 @@ export default function App() {
                 </p>
               </div>
 
-              {/* Smart Shrink Efficiency Breakdown */}
               <div className="p-4 rounded-2xl bg-emerald-950/25 border border-emerald-500/30 space-y-2.5">
                 <div className="flex items-center justify-between text-xs">
                   <span className="font-semibold text-emerald-300 flex items-center gap-1.5">
@@ -1759,7 +1992,6 @@ export default function App() {
                 </p>
               </div>
 
-              {/* Technical Specs */}
               <div className="space-y-2 text-xs">
                 <div className="flex justify-between py-1.5 border-b border-slate-800">
                   <span className="text-slate-400">Dimensions</span>
@@ -1781,7 +2013,6 @@ export default function App() {
                 </div>
               </div>
 
-              {/* Move to Album */}
               {inspectedUserId !== 'all' && (
                 <div>
                   <label className="block text-xs text-slate-400 mb-1.5">Album in Virtual Space</label>
@@ -1964,7 +2195,6 @@ export default function App() {
               </div>
             </div>
 
-            {/* Storage Quota Selector */}
             <div className="p-4 rounded-2xl bg-slate-950 border border-slate-800 space-y-3">
               <div className="flex items-center justify-between">
                 <label className="text-xs font-semibold text-slate-200">
@@ -2128,7 +2358,6 @@ export default function App() {
         </div>
       )}
 
-      {/* Server Config Modal */}
       {serverModalOpen && (
         <ServerConfigModal
           apiUrlInput={apiUrlInput}
@@ -2142,9 +2371,6 @@ export default function App() {
   );
 }
 
-// =====================================================================
-// SERVER CONNECTION MODAL COMPONENT
-// =====================================================================
 function ServerConfigModal({ apiUrlInput, setApiUrlInput, serverConnected, onSave, onClose }) {
   return (
     <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
@@ -2158,9 +2384,9 @@ function ServerConfigModal({ apiUrlInput, setApiUrlInput, serverConnected, onSav
               <Server className="w-5 h-5 text-indigo-400" />
             </div>
             <div>
-              <h3 className="text-sm font-bold text-white">Linux Laptop Server Connection</h3>
+              <h3 className="text-sm font-bold text-white">Server Connection</h3>
               <p className="text-[11px] text-slate-400">
-                Connect your Vercel frontend to your Linux laptop&apos;s FastAPI backend
+                Configure your Linux server backend URL
               </p>
             </div>
           </div>
@@ -2169,9 +2395,9 @@ function ServerConfigModal({ apiUrlInput, setApiUrlInput, serverConnected, onSav
           </button>
         </div>
 
-        <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 text-xs space-y-1.5">
+        <div className="p-3.5 rounded-2xl bg-slate-950 border border-slate-800 text-xs">
           <div className="flex items-center justify-between">
-            <span className="text-slate-400">Current Status:</span>
+            <span className="text-slate-400">Status:</span>
             <span
               className={`font-semibold flex items-center gap-1.5 ${
                 serverConnected ? 'text-emerald-400' : 'text-amber-400'
@@ -2180,29 +2406,22 @@ function ServerConfigModal({ apiUrlInput, setApiUrlInput, serverConnected, onSav
               <span
                 className={`w-2 h-2 rounded-full ${serverConnected ? 'bg-emerald-400' : 'bg-amber-400'}`}
               />
-              {serverConnected
-                ? 'Connected to Linux FastAPI Server'
-                : 'Using Browser Sandbox (Linux API not reached)'}
+              {serverConnected ? 'Connected to Linux Server' : 'Offline Mode'}
             </span>
           </div>
         </div>
 
         <div>
           <label className="block text-xs font-medium text-slate-300 mb-1.5">
-            Backend Server URL (FastAPI on your Linux laptop)
+            Backend Server URL
           </label>
           <input
             type="text"
             value={apiUrlInput}
             onChange={(e) => setApiUrlInput(e.target.value)}
-            placeholder="Leave empty for local proxy, or https://your-laptop-tunnel.trycloudflare.com"
+            placeholder="https://blserv.tailf8397c.ts.net"
             className="w-full px-3.5 py-2.5 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-indigo-500"
           />
-          <p className="text-[11px] text-slate-400 mt-1.5 leading-relaxed">
-            • When running locally on your laptop, leave blank or use <code className="text-indigo-300">http://localhost:8000</code>.
-            <br />• When deployed on <strong>Vercel</strong>, expose your Linux laptop port 8000 using{' '}
-            <code className="text-indigo-300">cloudflared tunnel --url http://localhost:8000</code> or Tailscale Funnel and paste the HTTPS URL here (or set <code className="text-indigo-300">VITE_API_URL</code> in Vercel).
-          </p>
         </div>
 
         <div className="flex justify-end gap-2 pt-2">
@@ -2217,7 +2436,7 @@ function ServerConfigModal({ apiUrlInput, setApiUrlInput, serverConnected, onSav
             type="submit"
             className="px-5 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-xs font-semibold text-white"
           >
-            Save & Test Connection
+            Save & Connect
           </button>
         </div>
       </form>

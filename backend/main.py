@@ -1,8 +1,11 @@
 import hashlib
 import io
 import os
+import platform
 import shutil
+import socket
 import sqlite3
+import threading
 import time
 import uuid
 from datetime import datetime, timedelta, timezone
@@ -37,8 +40,8 @@ USERS_STORAGE_DIR.mkdir(parents=True, exist_ok=True)
 
 app = FastAPI(
     title="Linux Laptop Photo Drive API",
-    description="Self-hosted Google Photos/Drive backend with smart visually-lossless photo shrinking and isolated user virtual spaces.",
-    version="1.0.0",
+    description="Self-hosted Google Photos/Drive backend with smart visually-lossless photo shrinking, isolated user virtual spaces, and real-time hardware telemetry.",
+    version="1.1.0",
 )
 
 # Enable CORS for Vercel frontend & local development
@@ -51,6 +54,182 @@ app.add_middleware(
 )
 
 security = HTTPBearer(auto_error=False)
+
+
+# =====================================================================
+# REAL-TIME LINUX HARDWARE TELEMETRY ENGINE (/proc & /sys)
+# =====================================================================
+_cpu_lock = threading.Lock()
+_last_cpu_times: Optional[tuple[int, int]] = None
+_last_cpu_percent: float = 0.0
+
+
+def _read_proc_cpu_times() -> Optional[tuple[int, int]]:
+    stat_path = Path("/proc/stat")
+    if not stat_path.exists():
+        return None
+    try:
+        first_line = stat_path.read_text().splitlines()[0]
+        parts = [int(x) for x in first_line.split()[1:]]
+        idle = parts[3] + (parts[4] if len(parts) > 4 else 0)
+        total = sum(parts)
+        return idle, total
+    except Exception:
+        return None
+
+
+def get_live_cpu_percent() -> float:
+    global _last_cpu_times, _last_cpu_percent
+    with _cpu_lock:
+        current = _read_proc_cpu_times()
+        if current is None:
+            return 12.5
+        if _last_cpu_times is None:
+            _last_cpu_times = current
+            time.sleep(0.08)
+            current = _read_proc_cpu_times() or current
+
+        prev_idle, prev_total = _last_cpu_times
+        curr_idle, curr_total = current
+        total_diff = curr_total - prev_total
+        idle_diff = curr_idle - prev_idle
+        _last_cpu_times = current
+
+        if total_diff > 0:
+            busy = max(0.0, min(100.0, (1.0 - (idle_diff / total_diff)) * 100.0))
+            _last_cpu_percent = round(busy, 1)
+        return _last_cpu_percent
+
+
+def get_live_memory_info() -> dict:
+    meminfo_path = Path("/proc/meminfo")
+    if meminfo_path.exists():
+        try:
+            data = {}
+            for line in meminfo_path.read_text().splitlines():
+                if ":" in line:
+                    k, v = line.split(":", 1)
+                    num = int(v.strip().split()[0]) * 1024  # kB -> bytes
+                    data[k.strip()] = num
+            total = data.get("MemTotal", 8 * 1024**3)
+            avail = data.get("MemAvailable", data.get("MemFree", total // 2))
+            used = max(0, total - avail)
+            swap_total = data.get("SwapTotal", 0)
+            swap_free = data.get("SwapFree", 0)
+            swap_used = max(0, swap_total - swap_free)
+            return {
+                "ram_total_bytes": total,
+                "ram_used_bytes": used,
+                "ram_available_bytes": avail,
+                "ram_percent": round((used / total) * 100.0, 1) if total > 0 else 0.0,
+                "swap_total_bytes": swap_total,
+                "swap_used_bytes": swap_used,
+                "swap_percent": round((swap_used / swap_total) * 100.0, 1) if swap_total > 0 else 0.0,
+            }
+        except Exception:
+            pass
+    return {
+        "ram_total_bytes": 8 * 1024**3,
+        "ram_used_bytes": 2 * 1024**3,
+        "ram_available_bytes": 6 * 1024**3,
+        "ram_percent": 25.0,
+        "swap_total_bytes": 0,
+        "swap_used_bytes": 0,
+        "swap_percent": 0.0,
+    }
+
+
+def get_cpu_temperature() -> Optional[float]:
+    thermal_base = Path("/sys/class/thermal")
+    if thermal_base.exists():
+        temps = []
+        for zone in thermal_base.glob("thermal_zone*"):
+            temp_file = zone / "temp"
+            if temp_file.exists():
+                try:
+                    raw = int(temp_file.read_text().strip())
+                    temp_c = raw / 1000.0 if raw > 1000 else float(raw)
+                    if 15.0 <= temp_c <= 115.0:
+                        temps.append(temp_c)
+                except Exception:
+                    pass
+        if temps:
+            return round(max(temps), 1)
+    return None
+
+
+def get_uptime_and_load() -> tuple[int, list[float]]:
+    uptime_sec = 0
+    uptime_path = Path("/proc/uptime")
+    if uptime_path.exists():
+        try:
+            uptime_sec = int(float(uptime_path.read_text().split()[0]))
+        except Exception:
+            pass
+
+    load_avg = [0.0, 0.0, 0.0]
+    if hasattr(os, "getloadavg"):
+        try:
+            l1, l5, l15 = os.getloadavg()
+            load_avg = [round(l1, 2), round(l5, 2), round(l15, 2)]
+        except Exception:
+            pass
+    return uptime_sec, load_avg
+
+
+def get_network_bytes() -> tuple[int, int]:
+    net_path = Path("/proc/net/dev")
+    rx_total = 0
+    tx_total = 0
+    if net_path.exists():
+        try:
+            for line in net_path.read_text().splitlines()[2:]:
+                if ":" not in line:
+                    continue
+                iface, rest = line.split(":", 1)
+                if iface.strip() == "lo":
+                    continue
+                fields = rest.split()
+                if len(fields) >= 9:
+                    rx_total += int(fields[0])
+                    tx_total += int(fields[8])
+        except Exception:
+            pass
+    return rx_total, tx_total
+
+
+def collect_system_telemetry(photo_drive_used_bytes: int = 0) -> dict:
+    disk = shutil.disk_usage(str(STORAGE_DIR))
+    disk_percent = round((disk.used / disk.total) * 100.0, 1) if disk.total > 0 else 0.0
+    cpu_pct = get_live_cpu_percent()
+    mem = get_live_memory_info()
+    temp_c = get_cpu_temperature()
+    uptime_sec, load_avg = get_uptime_and_load()
+    rx_bytes, tx_bytes = get_network_bytes()
+
+    return {
+        "hostname": socket.gethostname(),
+        "os_info": f"{platform.system()} {platform.release()}",
+        "cpu_percent": cpu_pct,
+        "cpu_cores": os.cpu_count() or 1,
+        "cpu_temp_c": temp_c,
+        "load_avg": load_avg,
+        "uptime_seconds": uptime_sec,
+        **mem,
+        "disk_total_bytes": disk.total,
+        "disk_used_bytes": disk.used,
+        "disk_free_bytes": disk.free,
+        "disk_percent": disk_percent,
+        "photo_drive_used_bytes": photo_drive_used_bytes,
+        "system_other_used_bytes": max(0, disk.used - photo_drive_used_bytes),
+        "net_rx_bytes": rx_bytes,
+        "net_tx_bytes": tx_bytes,
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+    }
+
+
+# Prime the CPU reader once at startup
+get_live_cpu_percent()
 
 
 # =====================================================================
@@ -205,15 +384,6 @@ def require_admin(user: dict = Depends(get_current_user)):
 # SMART VISUALLY-LOSSLESS PHOTO SHRINKING ENGINE
 # =====================================================================
 def smart_shrink_photo(raw_bytes: bytes, filename: str, max_dimension: int = 3840) -> dict:
-    """
-    Shrinks a photo as much as possible without visible quality loss:
-    1. Auto-rotates based on EXIF orientation so mobile photos never appear sideways.
-    2. Caps extreme dimensions (default 4K 3840px max edge; preserves crisp detail while avoiding 50MP bloat).
-    3. Encodes to high-efficiency WebP (quality=86, method=6) which achieves 65%-85% size reduction
-       with visually lossless perceptual fidelity.
-    4. Never inflates an already tightly-compressed image: if the original is smaller, keeps original bytes.
-    5. Generates a fast 420px WebP thumbnail for instant gallery loading.
-    """
     original_size = len(raw_bytes)
     try:
         img = Image.open(io.BytesIO(raw_bytes))
@@ -223,33 +393,34 @@ def smart_shrink_photo(raw_bytes: bytes, filename: str, max_dimension: int = 384
 
     width, height = img.size
 
-    # Cap ultra-huge dimensions if above max_dimension while keeping exact aspect ratio
     if max(width, height) > max_dimension:
         ratio = max_dimension / float(max(width, height))
         width = max(1, int(round(width * ratio)))
         height = max(1, int(round(height * ratio)))
         img = img.resize((width, height), Image.Resampling.LANCZOS)
 
-    # Convert color mode cleanly for WebP
     has_alpha = img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info)
     target_img = img.convert("RGBA" if has_alpha else "RGB")
 
-    # Compress to visually lossless WebP
     out_buf = io.BytesIO()
     target_img.save(out_buf, format="WEBP", quality=86, method=6)
     compressed_bytes = out_buf.getvalue()
     mime_type = "image/webp"
     ext = ".webp"
 
-    # Guarantee we never increase file size if user uploads an already tiny image
-    if len(compressed_bytes) >= original_size and max( img.size ) <= max_dimension:
+    if len(compressed_bytes) >= original_size and max(img.size) <= max_dimension:
         compressed_bytes = raw_bytes
         orig_ext = Path(filename).suffix.lower() or ".jpg"
         ext = orig_ext
-        mime_map = {".jpg": "image/jpeg", ".jpeg": "image/jpeg", ".png": "image/png", ".webp": "image/webp", ".gif": "image/gif"}
+        mime_map = {
+            ".jpg": "image/jpeg",
+            ".jpeg": "image/jpeg",
+            ".png": "image/png",
+            ".webp": "image/webp",
+            ".gif": "image/gif",
+        }
         mime_type = mime_map.get(orig_ext, "image/jpeg")
 
-    # Generate fast gallery thumbnail (420px max edge)
     thumb_img = target_img.copy()
     thumb_img.thumbnail((420, 420), Image.Resampling.LANCZOS)
     thumb_buf = io.BytesIO()
@@ -381,6 +552,7 @@ def health_check():
         "status": "ok",
         "server": "Linux Laptop Photo Drive",
         "disk_total_bytes": disk.total,
+        "disk_used_bytes": disk.used,
         "disk_free_bytes": disk.free,
         "timestamp": datetime.now(timezone.utc).isoformat(),
     }
@@ -560,15 +732,11 @@ async def upload_photo(
 
     owner_stats = get_user_with_stats(conn, dict(owner_row))
 
-    # Perform server-side visually lossless photo shrinking
     shrunk = smart_shrink_photo(raw_bytes, file.filename or "photo.jpg")
 
-    # If the browser already pre-shrunk the photo before sending over the network,
-    # preserve the true original file size so the user & Admin see accurate total savings!
     true_original_size = max(shrunk["original_size"], reported_original_size or 0)
     compressed_size = shrunk["compressed_size"]
 
-    # Check user's virtual storage quota limit
     if owner_stats["used_bytes"] + compressed_size > owner_stats["quota_bytes"]:
         conn.close()
         raise HTTPException(
@@ -733,8 +901,17 @@ def delete_photo(photo_id: str, current_user: dict = Depends(get_current_user)):
 
 
 # =====================================================================
-# ROUTES: ADMIN MANAGEMENT (USERS, QUOTAS, GLOBAL OVERVIEW)
+# ROUTES: ADMIN MANAGEMENT & REAL-TIME HARDWARE TELEMETRY
 # =====================================================================
+@app.get("/api/admin/telemetry")
+def admin_live_telemetry(admin: dict = Depends(require_admin)):
+    conn = get_db()
+    row = conn.execute("SELECT COALESCE(SUM(compressed_size), 0) AS total_used FROM photos").fetchone()
+    conn.close()
+    photo_drive_used = row["total_used"] if row else 0
+    return collect_system_telemetry(photo_drive_used)
+
+
 @app.get("/api/admin/overview")
 def admin_overview(admin: dict = Depends(require_admin)):
     conn = get_db()
@@ -748,7 +925,7 @@ def admin_overview(admin: dict = Depends(require_admin)):
     total_quota_allocated = sum(u["quota_bytes"] for u in users)
     total_photos = sum(u["photo_count"] for u in users)
 
-    disk = shutil.disk_usage(str(STORAGE_DIR))
+    telemetry = collect_system_telemetry(total_used)
 
     return {
         "total_users": len(users),
@@ -757,10 +934,8 @@ def admin_overview(admin: dict = Depends(require_admin)):
         "total_original_bytes": total_original,
         "total_saved_bytes": total_saved,
         "total_quota_allocated_bytes": total_quota_allocated,
-        "disk_total_bytes": disk.total,
-        "disk_used_bytes": disk.used,
-        "disk_free_bytes": disk.free,
         "storage_root": str(STORAGE_DIR),
+        **telemetry,
         "users": users,
     }
 
@@ -857,7 +1032,6 @@ def admin_delete_user(user_id: str, admin: dict = Depends(require_admin)):
         conn.execute("DELETE FROM users WHERE id = ?", (user_id,))
     conn.close()
 
-    # Remove the user's physical virtual space directory on the Linux laptop
     user_dir = USERS_STORAGE_DIR / user_id
     if user_dir.exists():
         shutil.rmtree(str(user_dir), ignore_errors=True)

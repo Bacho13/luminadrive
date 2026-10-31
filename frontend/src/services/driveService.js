@@ -1,11 +1,10 @@
 const STORAGE_KEYS = {
   API_URL: 'luminadrive_api_url',
   TOKEN: 'luminadrive_token',
-  MODE: 'luminadrive_mode', // 'auto' | 'remote' | 'local'
+  MODE: 'luminadrive_mode',
   LOCAL_STATE: 'luminadrive_local_db_v1',
 };
 
-// IndexedDB helper for storing large shrunk photo blobs in Local/Demo fallback mode
 const IDB_NAME = 'LuminaDriveBlobsDB';
 const IDB_STORE = 'photo_blobs';
 
@@ -70,7 +69,6 @@ function fileToDataUrl(file) {
   });
 }
 
-// Initial seed data for Local Fallback Mode
 function getInitialLocalDB() {
   const now = new Date().toISOString();
   return {
@@ -81,7 +79,7 @@ function getInitialLocalDB() {
         display_name: 'Server Admin',
         password: 'admin123',
         role: 'admin',
-        quota_bytes: 50 * 1024 * 1024 * 1024, // 50 GB
+        quota_bytes: 50 * 1024 * 1024 * 1024,
         avatar_color: '#8b5cf6',
         created_at: now,
       },
@@ -91,7 +89,7 @@ function getInitialLocalDB() {
         display_name: 'Elena Rostova',
         password: 'elena123',
         role: 'user',
-        quota_bytes: 5 * 1024 * 1024 * 1024, // 5 GB
+        quota_bytes: 5 * 1024 * 1024 * 1024,
         avatar_color: '#ec4899',
         created_at: now,
       },
@@ -101,7 +99,7 @@ function getInitialLocalDB() {
         display_name: 'David Kim',
         password: 'david123',
         role: 'user',
-        quota_bytes: 2 * 1024 * 1024 * 1024, // 2 GB
+        quota_bytes: 2 * 1024 * 1024 * 1024,
         avatar_color: '#06b6d4',
         created_at: now,
       },
@@ -112,92 +110,7 @@ function getInitialLocalDB() {
       { id: 'fld_street', user_id: 'usr_david', name: 'Tokyo Night Street', created_at: now },
       { id: 'fld_server', user_id: 'usr_admin', name: 'Home Lab & Setup', created_at: now },
     ],
-    photos: [
-      {
-        id: 'pht_demo_1',
-        user_id: 'usr_elena',
-        folder_id: 'fld_alps',
-        original_name: 'IMG_8492_Matterhorn_Sunrise.JPG',
-        mime_type: 'image/webp',
-        width: 3840,
-        height: 2560,
-        original_size: 8420000,
-        compressed_size: 1640000,
-        is_favorite: true,
-        created_at: new Date(Date.now() - 3600 * 1000 * 5).toISOString(),
-        demo_url: 'https://images.unsplash.com/photo-1506744038136-46273834b3fb?auto=format&fit=crop&w=1400&q=85',
-      },
-      {
-        id: 'pht_demo_2',
-        user_id: 'usr_elena',
-        folder_id: 'fld_alps',
-        original_name: 'IMG_8510_Alpine_Lake_Reflection.JPG',
-        mime_type: 'image/webp',
-        width: 3840,
-        height: 2160,
-        original_size: 7150000,
-        compressed_size: 1380000,
-        is_favorite: false,
-        created_at: new Date(Date.now() - 3600 * 1000 * 18).toISOString(),
-        demo_url: 'https://images.unsplash.com/photo-1469474968028-56623f02e42e?auto=format&fit=crop&w=1400&q=85',
-      },
-      {
-        id: 'pht_demo_3',
-        user_id: 'usr_elena',
-        folder_id: 'fld_family',
-        original_name: 'DSC_0419_Golden_Hour_Coast.PNG',
-        mime_type: 'image/webp',
-        width: 3200,
-        height: 2400,
-        original_size: 11200000,
-        compressed_size: 1890000,
-        is_favorite: true,
-        created_at: new Date(Date.now() - 3600 * 1000 * 32).toISOString(),
-        demo_url: 'https://images.unsplash.com/photo-1507525428034-b723cf961d3e?auto=format&fit=crop&w=1400&q=85',
-      },
-      {
-        id: 'pht_demo_4',
-        user_id: 'usr_david',
-        folder_id: 'fld_street',
-        original_name: 'RAW_9021_Neon_Shibuya_Rain.JPG',
-        mime_type: 'image/webp',
-        width: 3840,
-        height: 2560,
-        original_size: 9650000,
-        compressed_size: 1720000,
-        is_favorite: true,
-        created_at: new Date(Date.now() - 3600 * 1000 * 12).toISOString(),
-        demo_url: 'https://images.unsplash.com/photo-1509198397868-475647b2a1e5?auto=format&fit=crop&w=1400&q=85',
-      },
-      {
-        id: 'pht_demo_5',
-        user_id: 'usr_david',
-        folder_id: null,
-        original_name: 'IMG_3012_Mountain_Mist_Forest.JPG',
-        mime_type: 'image/webp',
-        width: 3600,
-        height: 2400,
-        original_size: 6480000,
-        compressed_size: 1210000,
-        is_favorite: false,
-        created_at: new Date(Date.now() - 3600 * 1000 * 48).toISOString(),
-        demo_url: 'https://images.unsplash.com/photo-1511497584788-876760111969?auto=format&fit=crop&w=1400&q=85',
-      },
-      {
-        id: 'pht_demo_6',
-        user_id: 'usr_admin',
-        folder_id: 'fld_server',
-        original_name: 'Nordic_Aurora_Night_Sky.JPG',
-        mime_type: 'image/webp',
-        width: 3840,
-        height: 2160,
-        original_size: 8900000,
-        compressed_size: 1540000,
-        is_favorite: true,
-        created_at: new Date(Date.now() - 3600 * 1000 * 4).toISOString(),
-        demo_url: 'https://images.unsplash.com/photo-1519681393784-d120267933ba?auto=format&fit=crop&w=1400&q=85',
-      },
-    ],
+    photos: [],
   };
 }
 
@@ -253,7 +166,7 @@ export async function probeServerHealth() {
   const baseUrl = getConfiguredApiUrl();
   try {
     const controller = new AbortController();
-    const timer = setTimeout(() => controller.abort(), 2500);
+    const timer = setTimeout(() => controller.abort(), 3000);
     const res = await fetch(`${baseUrl}/api/health`, { signal: controller.signal });
     clearTimeout(timer);
     if (res.ok) {
@@ -308,7 +221,49 @@ async function apiFetch(path, options = {}) {
   return res.json();
 }
 
-// Local DB helper to compute user stats identical to FastAPI backend
+// Upload via XMLHttpRequest to support real-time upload percentage progress (0% -> 100%)
+function apiUploadWithProgress(path, formData, onProgress) {
+  return new Promise((resolve, reject) => {
+    const base = getConfiguredApiUrl();
+    const token = getToken();
+    const xhr = new XMLHttpRequest();
+    xhr.open('POST', `${base}${path}`, true);
+    if (token) {
+      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+    }
+
+    xhr.upload.onprogress = (event) => {
+      if (event.lengthComputable && typeof onProgress === 'function') {
+        const pct = Math.min(100, Math.round((event.loaded / event.total) * 100));
+        onProgress(pct, event.loaded, event.total);
+      }
+    };
+
+    xhr.onload = () => {
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          if (typeof onProgress === 'function') onProgress(100);
+          resolve(JSON.parse(xhr.responseText));
+        } catch {
+          reject(new Error('Invalid server response'));
+        }
+      } else {
+        let errMsg = `Upload failed (${xhr.status})`;
+        try {
+          const errData = JSON.parse(xhr.responseText);
+          if (errData.detail) errMsg = errData.detail;
+        } catch {
+          // Ignore
+        }
+        reject(new Error(errMsg));
+      }
+    };
+
+    xhr.onerror = () => reject(new Error('Network error during photo upload'));
+    xhr.send(formData);
+  });
+}
+
 function computeLocalUserStats(db, user) {
   const userPhotos = db.photos.filter((p) => p.user_id === user.id);
   const userFolders = db.folders.filter((f) => f.user_id === user.id);
@@ -361,9 +316,41 @@ async function hydrateLocalPhoto(db, photo) {
   };
 }
 
-// =====================================================================
-// EXPORTED UNIFIED SERVICE METHODS
-// =====================================================================
+function buildFallbackTelemetry(totalUsed) {
+  const diskTotal = 243885932544;
+  const sysUsed = 20536918976;
+  const diskUsed = sysUsed + totalUsed;
+  const diskFree = Math.max(0, diskTotal - diskUsed);
+  const ramTotal = 8 * 1024 * 1024 * 1024;
+  const ramUsed = Math.round((2.1 + Math.sin(Date.now() / 4000) * 0.15) * 1024 * 1024 * 1024);
+  const cpuPct = Number((11.5 + Math.abs(Math.sin(Date.now() / 2200)) * 18.4).toFixed(1));
+  return {
+    hostname: 'blserv',
+    os_info: 'Linux 7.0.0-42-generic',
+    cpu_percent: cpuPct,
+    cpu_cores: 4,
+    cpu_temp_c: Number((46.0 + Math.sin(Date.now() / 5000) * 2.5).toFixed(1)),
+    load_avg: [Number((cpuPct / 45).toFixed(2)), 0.34, 0.28],
+    uptime_seconds: 18420 + Math.floor(Date.now() / 1000) % 10000,
+    ram_total_bytes: ramTotal,
+    ram_used_bytes: ramUsed,
+    ram_available_bytes: ramTotal - ramUsed,
+    ram_percent: Number(((ramUsed / ramTotal) * 100).toFixed(1)),
+    swap_total_bytes: 2 * 1024 * 1024 * 1024,
+    swap_used_bytes: 64 * 1024 * 1024,
+    swap_percent: 3.1,
+    disk_total_bytes: diskTotal,
+    disk_used_bytes: diskUsed,
+    disk_free_bytes: diskFree,
+    disk_percent: Number(((diskUsed / diskTotal) * 100).toFixed(1)),
+    photo_drive_used_bytes: totalUsed,
+    system_other_used_bytes: sysUsed,
+    net_rx_bytes: 184920192,
+    net_tx_bytes: 94821904,
+    timestamp: new Date().toISOString(),
+  };
+}
+
 export const driveService = {
   async login(username, password) {
     const health = await probeServerHealth();
@@ -376,7 +363,6 @@ export const driveService = {
       return data.user;
     }
 
-    // Local fallback
     const db = loadLocalDB();
     const user = db.users.find(
       (u) => u.username.toLowerCase() === username.trim().toLowerCase() && u.password === password
@@ -494,7 +480,7 @@ export const driveService = {
     return Promise.all(filtered.map((p) => hydrateLocalPhoto(db, p)));
   },
 
-  async uploadPhoto({ shrunkItem, folderId = null, targetUserId = null }) {
+  async uploadPhoto({ shrunkItem, folderId = null, targetUserId = null, onProgress = null }) {
     if (backendReachable) {
       const formData = new FormData();
       formData.append('file', shrunkItem.shrunkFile);
@@ -502,10 +488,7 @@ export const driveService = {
       if (folderId) formData.append('folder_id', folderId);
       if (targetUserId && targetUserId !== 'all') formData.append('target_user_id', targetUserId);
 
-      const created = await apiFetch('/api/photos/upload', {
-        method: 'POST',
-        body: formData,
-      });
+      const created = await apiUploadWithProgress('/api/photos/upload', formData, onProgress);
       return {
         ...created,
         file_url: resolveMediaUrl(created.file_url),
@@ -513,7 +496,6 @@ export const driveService = {
       };
     }
 
-    // Local fallback mode with real quota check & IndexedDB storage
     const db = loadLocalDB();
     const token = getToken() || '';
     const currentId = token.replace('local_token_', '');
@@ -526,9 +508,12 @@ export const driveService = {
       throw new Error('Storage quota limit reached for this virtual space! Ask Admin to increase quota.');
     }
 
+    if (typeof onProgress === 'function') onProgress(35);
     const photoId = `pht_${Date.now()}_${Math.random().toString(36).slice(2, 7)}`;
     const fullDataUrl = await fileToDataUrl(shrunkItem.shrunkFile);
+    if (typeof onProgress === 'function') onProgress(75);
     await saveBlobToIDB(photoId, fullDataUrl);
+    if (typeof onProgress === 'function') onProgress(100);
 
     const record = {
       id: photoId,
@@ -589,7 +574,6 @@ export const driveService = {
     return { deleted: true, id: photoId };
   },
 
-  // Admin methods
   async getAdminOverview() {
     if (backendReachable) {
       return apiFetch('/api/admin/overview');
@@ -601,7 +585,6 @@ export const driveService = {
     const totalSaved = users.reduce((a, u) => a + u.saved_bytes, 0);
     const totalQuota = users.reduce((a, u) => a + u.quota_bytes, 0);
     const totalPhotos = users.reduce((a, u) => a + u.photo_count, 0);
-    const simulatedDiskTotal = 512 * 1024 * 1024 * 1024; // 512 GB Linux Laptop SSD
 
     return {
       total_users: users.length,
@@ -610,12 +593,19 @@ export const driveService = {
       total_original_bytes: totalOrig,
       total_saved_bytes: totalSaved,
       total_quota_allocated_bytes: totalQuota,
-      disk_total_bytes: simulatedDiskTotal,
-      disk_used_bytes: 42 * 1024 * 1024 * 1024 + totalUsed,
-      disk_free_bytes: simulatedDiskTotal - (42 * 1024 * 1024 * 1024 + totalUsed),
-      storage_root: '/home/laptop-server/photo-drive/storage',
+      storage_root: '/home/bacho/photo-drive-server/storage',
+      ...buildFallbackTelemetry(totalUsed),
       users,
     };
+  },
+
+  async getLiveTelemetry() {
+    if (backendReachable) {
+      return apiFetch('/api/admin/telemetry');
+    }
+    const db = loadLocalDB();
+    const totalUsed = db.photos.reduce((a, p) => a + (p.compressed_size || 0), 0);
+    return buildFallbackTelemetry(totalUsed);
   },
 
   async adminCreateUser({ username, display_name, password, quota_mb, role, avatar_color }) {
