@@ -236,9 +236,11 @@ get_live_cpu_percent()
 # DATABASE SETUP & HELPERS
 # =====================================================================
 def get_db():
-    conn = sqlite3.connect(str(DB_PATH))
+    conn = sqlite3.connect(str(DB_PATH), timeout=30.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute("PRAGMA journal_mode = WAL")
+    conn.execute("PRAGMA synchronous = FULL")
     return conn
 
 
@@ -653,15 +655,18 @@ def create_folder(
 
 
 @app.delete("/api/folders/{folder_id}")
-def delete_folder(folder_id: str, current_user: dict = Depends(get_current_user)):
+def delete_folder(
+    folder_id: str,
+    confirm: bool = Query(default=False),
+    admin: dict = Depends(require_admin),
+):
+    if not confirm:
+        raise HTTPException(status_code=400, detail="Explicit admin confirmation required to delete")
     conn = get_db()
     folder = conn.execute("SELECT * FROM folders WHERE id = ?", (folder_id,)).fetchone()
     if not folder:
         conn.close()
         raise HTTPException(status_code=404, detail="Folder not found")
-    if folder["user_id"] != current_user["id"] and current_user["role"] != "admin":
-        conn.close()
-        raise HTTPException(status_code=403, detail="Access denied")
     with conn:
         conn.execute("DELETE FROM folders WHERE id = ?", (folder_id,))
     conn.close()
@@ -883,15 +888,18 @@ def update_photo(
 
 
 @app.delete("/api/photos/{photo_id}")
-def delete_photo(photo_id: str, current_user: dict = Depends(get_current_user)):
+def delete_photo(
+    photo_id: str,
+    confirm: bool = Query(default=False),
+    admin: dict = Depends(require_admin),
+):
+    if not confirm:
+        raise HTTPException(status_code=400, detail="Explicit admin confirmation required to delete")
     conn = get_db()
     photo = conn.execute("SELECT * FROM photos WHERE id = ?", (photo_id,)).fetchone()
     if not photo:
         conn.close()
         raise HTTPException(status_code=404, detail="Photo not found")
-    if photo["user_id"] != current_user["id"] and current_user["role"] != "admin":
-        conn.close()
-        raise HTTPException(status_code=403, detail="Access denied")
 
     file_path = USERS_STORAGE_DIR / photo["user_id"] / "photos" / photo["stored_filename"]
     thumb_path = USERS_STORAGE_DIR / photo["user_id"] / "thumbs" / photo["thumb_filename"]
@@ -1042,7 +1050,13 @@ def admin_update_user(user_id: str, payload: UpdateUserRequest, admin: dict = De
 
 
 @app.delete("/api/admin/users/{user_id}")
-def admin_delete_user(user_id: str, admin: dict = Depends(require_admin)):
+def admin_delete_user(
+    user_id: str,
+    confirm: bool = Query(default=False),
+    admin: dict = Depends(require_admin),
+):
+    if not confirm:
+        raise HTTPException(status_code=400, detail="Explicit admin confirmation required to delete user")
     if user_id == admin["id"]:
         raise HTTPException(status_code=400, detail="You cannot delete your own active Admin account")
 

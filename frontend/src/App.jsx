@@ -468,6 +468,13 @@ export default function App() {
 
   async function handleDeleteFolder(folderId, e) {
     e.stopPropagation();
+    if (currentUser?.role !== 'admin') {
+      showToast('Only the Admin can delete albums', 'error');
+      return;
+    }
+    if (!window.confirm('Admin Confirmation: Are you sure you want to delete this album?')) {
+      return;
+    }
     try {
       await driveService.deleteFolder(folderId);
       if (selectedFolderId === folderId) setSelectedFolderId(null);
@@ -507,6 +514,13 @@ export default function App() {
 
   async function handleDeletePhoto(photo, e) {
     e?.stopPropagation();
+    if (currentUser?.role !== 'admin') {
+      showToast('Only the Admin can delete photos from the server', 'error');
+      return;
+    }
+    if (!window.confirm(`Admin Confirmation: Permanently delete "${photo.original_name}" from the server?`)) {
+      return;
+    }
     try {
       await driveService.deletePhoto(photo.id);
       setPhotos((prev) => prev.filter((p) => p.id !== photo.id));
@@ -560,6 +574,13 @@ export default function App() {
   async function handleAdminDeleteUser(user) {
     if (user.id === currentUser.id) {
       showToast('Cannot delete your own active Admin account', 'error');
+      return;
+    }
+    if (
+      !window.confirm(
+        `Admin Confirmation: Permanently delete user "${user.display_name}" (@${user.username}) and all their photos?`
+      )
+    ) {
       return;
     }
     try {
@@ -907,13 +928,15 @@ export default function App() {
                       </span>
                       <div className="flex items-center gap-1.5">
                         <span className="text-[10px] text-slate-500">{folder.photo_count ?? 0}</span>
-                        <button
-                          onClick={(e) => handleDeleteFolder(folder.id, e)}
-                          className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-rose-400 p-0.5 transition"
-                          title="Delete Album"
-                        >
-                          <Trash2 className="w-3 h-3" />
-                        </button>
+                        {currentUser.role === 'admin' && (
+                          <button
+                            onClick={(e) => handleDeleteFolder(folder.id, e)}
+                            className="opacity-0 group-hover:opacity-100 text-slate-500 hover:text-rose-400 p-0.5 transition"
+                            title="Delete Album (Admin Only)"
+                          >
+                            <Trash2 className="w-3 h-3" />
+                          </button>
+                        )}
                       </div>
                     </div>
                   ))
@@ -1644,13 +1667,15 @@ export default function App() {
                           </a>
                         </div>
 
-                        <button
-                          onClick={(e) => handleDeletePhoto(photo, e)}
-                          className="p-1.5 rounded-lg bg-slate-900/80 hover:bg-rose-600 border border-slate-700 hover:border-rose-500 text-slate-300 hover:text-white backdrop-blur-md transition"
-                          title="Delete Photo"
-                        >
-                          <Trash2 className="w-3.5 h-3.5" />
-                        </button>
+                        {currentUser.role === 'admin' && (
+                          <button
+                            onClick={(e) => handleDeletePhoto(photo, e)}
+                            className="p-1.5 rounded-lg bg-slate-900/80 hover:bg-rose-600 border border-slate-700 hover:border-rose-500 text-slate-300 hover:text-white backdrop-blur-md transition"
+                            title="Delete Photo (Admin Only)"
+                          >
+                            <Trash2 className="w-3.5 h-3.5" />
+                          </button>
+                        )}
                       </div>
                     </div>
 
@@ -2082,12 +2107,14 @@ export default function App() {
                 </a>
               </div>
 
-              <button
-                onClick={() => handleDeletePhoto(lightboxPhoto)}
-                className="w-full py-2.5 px-3 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-300 text-xs font-medium flex items-center justify-center gap-1.5 transition"
-              >
-                <Trash2 className="w-4 h-4" /> Delete from Virtual Space
-              </button>
+              {currentUser.role === 'admin' && (
+                <button
+                  onClick={() => handleDeletePhoto(lightboxPhoto)}
+                  className="w-full py-2.5 px-3 rounded-xl bg-rose-500/15 hover:bg-rose-500/25 border border-rose-500/30 text-rose-300 text-xs font-medium flex items-center justify-center gap-1.5 transition"
+                >
+                  <Trash2 className="w-4 h-4" /> Delete from Virtual Space (Admin)
+                </button>
+              )}
             </div>
           </div>
         </div>

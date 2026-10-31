@@ -384,7 +384,7 @@ export const driveService = {
   },
 
   async deleteFolder(folderId) {
-    return apiFetch(`/api/folders/${folderId}`, { method: 'DELETE' });
+    return apiFetch(`/api/folders/${folderId}?confirm=true`, { method: 'DELETE' });
   },
 
   async getPhotos({ userId = null, folderId = null, favoritesOnly = false } = {}) {
@@ -431,7 +431,7 @@ export const driveService = {
   },
 
   async deletePhoto(photoId) {
-    return apiFetch(`/api/photos/${photoId}`, { method: 'DELETE' });
+    return apiFetch(`/api/photos/${photoId}?confirm=true`, { method: 'DELETE' });
   },
 
   async getAdminOverview() {
@@ -457,6 +457,6 @@ export const driveService = {
   },
 
   async adminDeleteUser(userId) {
-    return apiFetch(`/api/admin/users/${userId}`, { method: 'DELETE' });
+    return apiFetch(`/api/admin/users/${userId}?confirm=true`, { method: 'DELETE' });
   },
 };
