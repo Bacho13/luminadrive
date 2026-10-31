@@ -221,47 +221,99 @@ async function apiFetch(path, options = {}) {
   return res.json();
 }
 
-// Upload via XMLHttpRequest to support real-time upload percentage progress (0% -> 100%)
-function apiUploadWithProgress(path, formData, onProgress) {
-  return new Promise((resolve, reject) => {
-    const base = getConfiguredApiUrl();
-    const token = getToken();
-    const xhr = new XMLHttpRequest();
-    xhr.open('POST', `${base}${path}`, true);
-    if (token) {
-      xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+// Upload via XMLHttpRequest with automatic retry & smooth 0->95% (sending) -> 100% (green saved) progress
+async function apiUploadWithProgress(path, formDataFactory, onProgress, maxRetries = 3) {
+  let lastError = null;
+  for (let attempt = 1; attempt <= maxRetries; attempt++) {
+    try {
+      return await new Promise((resolve, reject) => {
+        const base = getConfiguredApiUrl();
+        const token = getToken();
+        const xhr = new XMLHttpRequest();
+        xhr.open('POST', `${base}${path}`, true);
+        xhr.timeout = 45000;
+        if (token) {
+          xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+        }
+
+        let processingTimer = null;
+        let currentPct = 1;
+
+        xhr.upload.onprogress = (event) => {
+          if (event.lengthComputable && typeof onProgress === 'function') {
+            // Map network byte transfer to 1%..92% so 100% is strictly reserved for green 'Saved on disk'
+            const sendPct = Math.min(92, Math.max(1, Math.round((event.loaded / event.total) * 92)));
+            currentPct = sendPct;
+            onProgress(sendPct, event.loaded, event.total);
+
+            if (event.loaded >= event.total && !processingTimer) {
+              processingTimer = setInterval(() => {
+                if (currentPct < 98) {
+                  currentPct += 1;
+                  onProgress(currentPct, event.loaded, event.total);
+                }
+              }, 180);
+            }
+          }
+        };
+
+        const clearTimer = () => {
+          if (processingTimer) {
+            clearInterval(processingTimer);
+            processingTimer = null;
+          }
+        };
+
+        xhr.onload = () => {
+          clearTimer();
+          if (xhr.status >= 200 && xhr.status < 300) {
+            try {
+              const parsed = JSON.parse(xhr.responseText);
+              if (typeof onProgress === 'function') onProgress(100);
+              resolve(parsed);
+            } catch {
+              reject(new Error('Invalid server response'));
+            }
+          } else {
+            let errMsg = `Upload failed (${xhr.status})`;
+            try {
+              const errData = JSON.parse(xhr.responseText);
+              if (errData.detail) errMsg = errData.detail;
+            } catch {
+              // Ignore
+            }
+            const err = new Error(errMsg);
+            err.status = xhr.status;
+            reject(err);
+          }
+        };
+
+        xhr.onerror = () => {
+          clearTimer();
+          reject(new Error('Network error during photo upload'));
+        };
+
+        xhr.ontimeout = () => {
+          clearTimer();
+          reject(new Error('Upload timed out, retrying...'));
+        };
+
+        const body = typeof formDataFactory === 'function' ? formDataFactory() : formDataFactory;
+        xhr.send(body);
+      });
+    } catch (err) {
+      lastError = err;
+      // Don't retry on 413 (Quota Exceeded) or 401/403 (Auth error)
+      if (err.status === 413 || err.status === 401 || err.status === 403) {
+        throw err;
+      }
+      if (attempt < maxRetries) {
+        if (typeof onProgress === 'function') onProgress(5);
+        await new Promise((r) => setTimeout(r, 800 * attempt));
+      }
     }
-
-    xhr.upload.onprogress = (event) => {
-      if (event.lengthComputable && typeof onProgress === 'function') {
-        const pct = Math.min(100, Math.round((event.loaded / event.total) * 100));
-        onProgress(pct, event.loaded, event.total);
-      }
-    };
-
-    xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) {
-        try {
-          if (typeof onProgress === 'function') onProgress(100);
-          resolve(JSON.parse(xhr.responseText));
-        } catch {
-          reject(new Error('Invalid server response'));
-        }
-      } else {
-        let errMsg = `Upload failed (${xhr.status})`;
-        try {
-          const errData = JSON.parse(xhr.responseText);
-          if (errData.detail) errMsg = errData.detail;
-        } catch {
-          // Ignore
-        }
-        reject(new Error(errMsg));
-      }
-    };
-
-    xhr.onerror = () => reject(new Error('Network error during photo upload'));
-    xhr.send(formData);
-  });
+  }
+  throw lastError || new Error('Upload failed');
 }
 
 function computeLocalUserStats(db, user) {
@@ -482,13 +534,16 @@ export const driveService = {
 
   async uploadPhoto({ shrunkItem, folderId = null, targetUserId = null, onProgress = null }) {
     if (backendReachable) {
-      const formData = new FormData();
-      formData.append('file', shrunkItem.shrunkFile);
-      formData.append('reported_original_size', String(shrunkItem.originalSize));
-      if (folderId) formData.append('folder_id', folderId);
-      if (targetUserId && targetUserId !== 'all') formData.append('target_user_id', targetUserId);
+      const buildFormData = () => {
+        const formData = new FormData();
+        formData.append('file', shrunkItem.shrunkFile);
+        formData.append('reported_original_size', String(shrunkItem.originalSize));
+        if (folderId) formData.append('folder_id', folderId);
+        if (targetUserId && targetUserId !== 'all') formData.append('target_user_id', targetUserId);
+        return formData;
+      };
 
-      const created = await apiUploadWithProgress('/api/photos/upload', formData, onProgress);
+      const created = await apiUploadWithProgress('/api/photos/upload', buildFormData, onProgress);
       return {
         ...created,
         file_url: resolveMediaUrl(created.file_url),

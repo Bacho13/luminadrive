@@ -387,13 +387,15 @@ def smart_shrink_photo(raw_bytes: bytes, filename: str, max_dimension: int = 384
     original_size = len(raw_bytes)
     try:
         img = Image.open(io.BytesIO(raw_bytes))
+        orig_format = (img.format or "").upper()
         img = ImageOps.exif_transpose(img)
     except Exception as exc:
         raise HTTPException(status_code=400, detail=f"Invalid image file '{filename}': {exc}")
 
     width, height = img.size
+    needs_resize = max(width, height) > max_dimension
 
-    if max(width, height) > max_dimension:
+    if needs_resize:
         ratio = max_dimension / float(max(width, height))
         width = max(1, int(round(width * ratio)))
         height = max(1, int(round(height * ratio)))
@@ -402,29 +404,36 @@ def smart_shrink_photo(raw_bytes: bytes, filename: str, max_dimension: int = 384
     has_alpha = img.mode in ("RGBA", "LA") or (img.mode == "P" and "transparency" in img.info)
     target_img = img.convert("RGBA" if has_alpha else "RGB")
 
-    out_buf = io.BytesIO()
-    target_img.save(out_buf, format="WEBP", quality=86, method=6)
-    compressed_bytes = out_buf.getvalue()
-    mime_type = "image/webp"
-    ext = ".webp"
-
-    if len(compressed_bytes) >= original_size and max(img.size) <= max_dimension:
+    # Fast path: if the browser already pre-shrunk the image to WebP within max_dimension,
+    # avoid slow double re-encoding on the laptop CPU so uploads complete instantaneously!
+    if orig_format == "WEBP" and not needs_resize:
         compressed_bytes = raw_bytes
-        orig_ext = Path(filename).suffix.lower() or ".jpg"
-        ext = orig_ext
-        mime_map = {
-            ".jpg": "image/jpeg",
-            ".jpeg": "image/jpeg",
-            ".png": "image/png",
-            ".webp": "image/webp",
-            ".gif": "image/gif",
-        }
-        mime_type = mime_map.get(orig_ext, "image/jpeg")
+        mime_type = "image/webp"
+        ext = ".webp"
+    else:
+        out_buf = io.BytesIO()
+        target_img.save(out_buf, format="WEBP", quality=86, method=4)
+        compressed_bytes = out_buf.getvalue()
+        mime_type = "image/webp"
+        ext = ".webp"
+
+        if len(compressed_bytes) >= original_size and not needs_resize:
+            compressed_bytes = raw_bytes
+            orig_ext = Path(filename).suffix.lower() or ".jpg"
+            ext = orig_ext
+            mime_map = {
+                ".jpg": "image/jpeg",
+                ".jpeg": "image/jpeg",
+                ".png": "image/png",
+                ".webp": "image/webp",
+                ".gif": "image/gif",
+            }
+            mime_type = mime_map.get(orig_ext, "image/jpeg")
 
     thumb_img = target_img.copy()
     thumb_img.thumbnail((420, 420), Image.Resampling.LANCZOS)
     thumb_buf = io.BytesIO()
-    thumb_img.save(thumb_buf, format="WEBP", quality=80, method=4)
+    thumb_img.save(thumb_buf, format="WEBP", quality=78, method=2)
     thumb_bytes = thumb_buf.getvalue()
 
     return {

@@ -351,13 +351,13 @@ export default function App() {
     }
   }
 
-  // Upload with real-time per-file AND overall percentage
+  // Upload with real-time per-file AND overall percentage (never stops mid-batch)
   async function handleConfirmUpload() {
-    const readyItems = pendingUploads.filter((i) => (i.status === 'ready' || i.status === 'error') && i.shrunk);
-    if (readyItems.length === 0) return;
+    const itemsToUpload = pendingUploads.filter((i) => i.status !== 'done' && i.shrunk);
+    if (itemsToUpload.length === 0) return;
 
     setUploading(true);
-    setOverallUploadProgress({ done: 0, total: readyItems.length, percent: 0 });
+    setOverallUploadProgress({ done: 0, total: itemsToUpload.length, percent: 0 });
 
     const targetUser =
       currentUser.role === 'admin' && inspectedUserId && inspectedUserId !== 'all'
@@ -367,15 +367,16 @@ export default function App() {
 
     let uploadedCount = 0;
     let totalSaved = 0;
+    let lastErrMessage = null;
 
-    try {
-      for (let idx = 0; idx < readyItems.length; idx++) {
-        const item = readyItems[idx];
+    for (let idx = 0; idx < itemsToUpload.length; idx++) {
+      const item = itemsToUpload[idx];
 
-        setPendingUploads((prev) =>
-          prev.map((p) => (p.tempId === item.tempId ? { ...p, status: 'uploading', uploadPercent: 1 } : p))
-        );
+      setPendingUploads((prev) =>
+        prev.map((p) => (p.tempId === item.tempId ? { ...p, status: 'uploading', uploadPercent: 2 } : p))
+      );
 
+      try {
         await driveService.uploadPhoto({
           shrunkItem: item.shrunk,
           folderId,
@@ -386,11 +387,11 @@ export default function App() {
             );
             const overallPct = Math.min(
               100,
-              Math.round(((idx + filePct / 100) / readyItems.length) * 100)
+              Math.round(((uploadedCount + filePct / 100) / itemsToUpload.length) * 100)
             );
             setOverallUploadProgress({
-              done: idx,
-              total: readyItems.length,
+              done: uploadedCount,
+              total: itemsToUpload.length,
               percent: overallPct,
             });
           },
@@ -405,23 +406,37 @@ export default function App() {
 
         setOverallUploadProgress({
           done: uploadedCount,
-          total: readyItems.length,
-          percent: Math.round((uploadedCount / readyItems.length) * 100),
+          total: itemsToUpload.length,
+          percent: Math.round((uploadedCount / itemsToUpload.length) * 100),
         });
+      } catch (err) {
+        lastErrMessage = err.message || 'Upload failed';
+        setPendingUploads((prev) =>
+          prev.map((p) => (p.tempId === item.tempId ? { ...p, status: 'error', uploadPercent: 0 } : p))
+        );
+        // Stop only if storage quota is completely full (413)
+        if (lastErrMessage.toLowerCase().includes('quota')) {
+          break;
+        }
       }
+    }
 
-      setTimeout(async () => {
+    await refreshWorkspace();
+
+    if (uploadedCount === itemsToUpload.length) {
+      setTimeout(() => {
         setPendingUploads([]);
         setUploadModalOpen(false);
         setUploading(false);
-        await refreshWorkspace();
         showToast(
           `Uploaded ${uploadedCount} photo${uploadedCount > 1 ? 's' : ''} (100%) — Saved ${formatBytes(totalSaved)}!`
         );
-      }, 350);
-    } catch (err) {
+      }, 300);
+    } else {
+      // Remove completed ones so only any failed ones remain
+      setPendingUploads((prev) => prev.filter((p) => p.status !== 'done'));
       setUploading(false);
-      showToast(err.message || 'Upload failed', 'error');
+      showToast(lastErrMessage || `Uploaded ${uploadedCount}/${itemsToUpload.length} photos`, 'error');
     }
   }
 
