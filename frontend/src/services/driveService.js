@@ -690,19 +690,24 @@ export const driveService = {
     return computeLocalUserStats(db, newUser);
   },
 
-  async adminUpdateUser(userId, { display_name, password, quota_mb, role }) {
+  async adminUpdateUser(userId, { username, display_name, password, quota_mb, role }) {
     if (backendReachable) {
       return apiFetch(`/api/admin/users/${userId}`, {
         method: 'PATCH',
-        body: JSON.stringify({ display_name, password, quota_mb, role }),
+        body: JSON.stringify({ username, display_name, password, quota_mb, role }),
       });
     }
     const db = loadLocalDB();
     const idx = db.users.findIndex((u) => u.id === userId);
     if (idx === -1) throw new Error('User not found');
     const u = db.users[idx];
+    const cleanUser = username ? username.trim().toLowerCase() : u.username;
+    if (db.users.some((other) => other.id !== userId && other.username.toLowerCase() === cleanUser)) {
+      throw new Error(`Login username '${cleanUser}' is already taken`);
+    }
     const updated = {
       ...u,
+      username: cleanUser,
       ...(display_name ? { display_name: display_name.trim() } : {}),
       ...(password ? { password: password.trim() } : {}),
       ...(quota_mb !== undefined ? { quota_bytes: Math.max(50, Number(quota_mb)) * 1024 * 1024 } : {}),

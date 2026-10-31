@@ -534,6 +534,7 @@ class CreateUserRequest(BaseModel):
 
 
 class UpdateUserRequest(BaseModel):
+    username: Optional[str] = None
     display_name: Optional[str] = None
     password: Optional[str] = None
     quota_mb: Optional[int] = None
@@ -1002,6 +1003,20 @@ def admin_update_user(user_id: str, payload: UpdateUserRequest, admin: dict = De
 
     updates = []
     params = []
+    if payload.username is not None and payload.username.strip():
+        clean_username = payload.username.strip().lower()
+        if len(clean_username) < 2:
+            conn.close()
+            raise HTTPException(status_code=400, detail="Login username must be at least 2 characters")
+        dup = conn.execute(
+            "SELECT id FROM users WHERE username = ? AND id != ?",
+            (clean_username, user_id),
+        ).fetchone()
+        if dup:
+            conn.close()
+            raise HTTPException(status_code=400, detail=f"Login username '{clean_username}' is already taken")
+        updates.append("username = ?")
+        params.append(clean_username)
     if payload.display_name is not None and payload.display_name.strip():
         updates.append("display_name = ?")
         params.append(payload.display_name.strip())

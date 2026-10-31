@@ -118,6 +118,7 @@ export default function App() {
   });
   const [editingUser, setEditingUser] = useState(null);
   const [editUserForm, setEditUserForm] = useState({
+    username: '',
     display_name: '',
     password: '',
     quota_mb: 5120,
@@ -535,6 +536,7 @@ export default function App() {
     if (!editingUser) return;
     try {
       await driveService.adminUpdateUser(editingUser.id, {
+        username: editUserForm.username,
         display_name: editUserForm.display_name,
         password: editUserForm.password || undefined,
         quota_mb: Number(editUserForm.quota_mb),
@@ -542,7 +544,7 @@ export default function App() {
       });
       setEditingUser(null);
       await refreshWorkspace();
-      showToast('User settings & storage quota updated');
+      showToast('User login name, password & quota updated!');
     } catch (err) {
       showToast(err.message, 'error');
     }
@@ -1436,8 +1438,10 @@ export default function App() {
                                 {u.role.toUpperCase()}
                               </span>
                             </div>
-                            <p className="text-xs text-slate-400">
-                              @{u.username} · <span className="font-mono text-[11px]">{u.virtual_path}</span>
+                            <p className="text-xs text-slate-400 mt-0.5">
+                              Login Name:{' '}
+                              <span className="font-semibold text-indigo-300">{u.username}</span> ·{' '}
+                              <span className="font-mono text-[11px]">{u.virtual_path}</span>
                             </p>
                           </div>
                         </div>
@@ -1447,6 +1451,7 @@ export default function App() {
                             onClick={() => {
                               setEditingUser(u);
                               setEditUserForm({
+                                username: u.username,
                                 display_name: u.display_name,
                                 password: '',
                                 quota_mb: Math.round(u.quota_bytes / (1024 * 1024)),
@@ -1455,7 +1460,7 @@ export default function App() {
                             }}
                             className="px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-xs text-slate-200 transition"
                           >
-                            Edit Quota
+                            Edit User / Password
                           </button>
                           {u.id !== currentUser.id && (
                             <button
@@ -2269,7 +2274,7 @@ export default function App() {
       )}
 
       {/* ===============================================================
-          MODAL 5: ADMIN — EDIT USER QUOTA / PASSWORD
+          MODAL 5: ADMIN — EDIT USER LOGIN NAME, PASSWORD & QUOTA
          =============================================================== */}
       {editingUser && currentUser.role === 'admin' && (
         <div className="fixed inset-0 z-50 bg-slate-950/80 backdrop-blur-sm flex items-center justify-center p-4">
@@ -2280,10 +2285,11 @@ export default function App() {
             <div className="flex items-center justify-between border-b border-slate-800 pb-3">
               <div>
                 <h3 className="text-sm font-bold text-white">
-                  Edit Quota & Settings: @{editingUser.username}
+                  Edit User Account: {editingUser.display_name}
                 </h3>
                 <p className="text-[11px] text-slate-400">
-                  Currently using {formatBytes(editingUser.used_bytes)}
+                  Current Login Name: <strong className="text-indigo-300">{editingUser.username}</strong> · Using{' '}
+                  {formatBytes(editingUser.used_bytes)}
                 </p>
               </div>
               <button
@@ -2295,27 +2301,43 @@ export default function App() {
               </button>
             </div>
 
-            <div>
-              <label className="block text-xs font-medium text-slate-300 mb-1">Display Name</label>
-              <input
-                type="text"
-                required
-                value={editUserForm.display_name}
-                onChange={(e) => setEditUserForm({ ...editUserForm, display_name: e.target.value })}
-                className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white"
-              />
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">
+                  Login Name (Username)
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={editUserForm.username}
+                  onChange={(e) => setEditUserForm({ ...editUserForm, username: e.target.value })}
+                  placeholder="Login username"
+                  className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-indigo-500"
+                />
+              </div>
+
+              <div>
+                <label className="block text-xs font-medium text-slate-300 mb-1">Display Name</label>
+                <input
+                  type="text"
+                  required
+                  value={editUserForm.display_name}
+                  onChange={(e) => setEditUserForm({ ...editUserForm, display_name: e.target.value })}
+                  className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-indigo-500"
+                />
+              </div>
             </div>
 
             <div>
               <label className="block text-xs font-medium text-slate-300 mb-1">
-                Reset Password (leave blank to keep current)
+                Change / Reset Password (leave blank to keep current)
               </label>
               <input
                 type="text"
                 value={editUserForm.password}
                 onChange={(e) => setEditUserForm({ ...editUserForm, password: e.target.value })}
-                placeholder="New password..."
-                className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white"
+                placeholder="Enter new password for this user..."
+                className="w-full px-3.5 py-2 rounded-xl bg-slate-950 border border-slate-800 text-xs text-white focus:outline-none focus:border-indigo-500"
               />
             </div>
 
