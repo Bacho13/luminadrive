@@ -1,0 +1,24 @@
+# Dependencies
+node_modules/
+frontend/node_modules/
+
+# Build output
+dist/
+frontend/dist/
+
+# Python virtual environment & cache
+venv/
+backend/venv/
+__pycache__/
+*.py[cod]
+
+# Local photo storage & SQLite database
+storage/
+backend/storage/
+*.db
+*.sqlite3
+
+# Logs & OS files
+*.log
+.DS_Store
+Thumbs.db
