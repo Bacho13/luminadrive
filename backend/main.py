@@ -326,9 +326,11 @@ def init_db():
             """
         )
 
-        # Ensure default Admin exists
-        cur = conn.execute("SELECT id FROM users WHERE username = ?", (DEFAULT_ADMIN_USER.lower(),))
-        if not cur.fetchone():
+        # Ensure default Admin exists with 2 GB max virtual space
+        admin_quota_2gb = 2 * 1024 * 1024 * 1024  # 2 GB
+        cur = conn.execute("SELECT id, quota_bytes FROM users WHERE username = ?", (DEFAULT_ADMIN_USER.lower(),))
+        existing_admin = cur.fetchone()
+        if not existing_admin:
             admin_id = "usr_admin"
             now = datetime.now(timezone.utc).isoformat()
             conn.execute(
@@ -341,11 +343,16 @@ def init_db():
                     DEFAULT_ADMIN_USER.lower(),
                     "Server Admin",
                     hash_password(DEFAULT_ADMIN_PASS),
-                    50 * 1024 * 1024 * 1024,  # 50 GB default for admin
+                    admin_quota_2gb,
                     now,
                 ),
             )
             ensure_user_virtual_dirs(admin_id)
+        elif existing_admin["quota_bytes"] > admin_quota_2gb:
+            conn.execute(
+                "UPDATE users SET quota_bytes = ? WHERE id = ?",
+                (admin_quota_2gb, existing_admin["id"]),
+            )
     conn.close()
 
 
@@ -977,8 +984,9 @@ def admin_create_user(payload: CreateUserRequest, admin: dict = Depends(require_
         raise HTTPException(status_code=400, detail="Password must be at least 4 characters")
 
     user_id = f"usr_{uuid.uuid4().hex[:10]}"
-    quota_bytes = max(50, payload.quota_mb) * 1024 * 1024
     role = "admin" if payload.role == "admin" else "user"
+    effective_mb = min(2048, max(50, payload.quota_mb)) if role == "admin" else max(50, payload.quota_mb)
+    quota_bytes = effective_mb * 1024 * 1024
     now = datetime.now(timezone.utc).isoformat()
 
     conn = get_db()
@@ -1041,9 +1049,11 @@ def admin_update_user(user_id: str, payload: UpdateUserRequest, admin: dict = De
     if payload.password is not None and payload.password.strip():
         updates.append("password_hash = ?")
         params.append(hash_password(payload.password.strip()))
+    target_role = payload.role if payload.role in ("admin", "user") else user["role"]
     if payload.quota_mb is not None:
+        capped_mb = min(2048, max(50, payload.quota_mb)) if target_role == "admin" else max(50, payload.quota_mb)
         updates.append("quota_bytes = ?")
-        params.append(max(50, payload.quota_mb) * 1024 * 1024)
+        params.append(capped_mb * 1024 * 1024)
     if payload.role in ("admin", "user"):
         updates.append("role = ?")
         params.append(payload.role)
