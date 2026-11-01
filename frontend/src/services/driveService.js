@@ -51,29 +51,25 @@ function dataUrlToFile(dataUrl, filename, mimeType = 'image/webp') {
   return new File([u8arr], filename, { type: mime });
 }
 
-let activeBaseUrl = '';
+let activeBaseUrl = DEFAULT_SERVER_URL;
 
 export function getConfiguredApiUrl() {
   const saved = localStorage.getItem(STORAGE_KEYS.API_URL);
   if (saved) {
-    if (
-      saved.includes('trycloudflare.com') ||
-      saved.includes('192.168.') ||
-      saved.includes('blserv.tailf8397c.ts.net')
-    ) {
+    if (saved.includes('trycloudflare.com') || saved.includes('192.168.')) {
       localStorage.removeItem(STORAGE_KEYS.API_URL);
     } else {
       return saved.replace(/\/+$/, '');
     }
   }
-  return activeBaseUrl;
+  return activeBaseUrl || DEFAULT_SERVER_URL;
 }
 
 export function setConfiguredApiUrl(url) {
   const cleaned = (url || '').trim().replace(/\/+$/, '');
-  if (!cleaned || cleaned.includes('blserv.tailf8397c.ts.net')) {
+  if (!cleaned) {
     localStorage.removeItem(STORAGE_KEYS.API_URL);
-    activeBaseUrl = '';
+    activeBaseUrl = DEFAULT_SERVER_URL;
   } else {
     localStorage.setItem(STORAGE_KEYS.API_URL, cleaned);
     activeBaseUrl = cleaned;
@@ -104,28 +100,21 @@ export function isBackendConnected() {
 }
 
 export async function probeServerHealth() {
-  // Try same-origin /api/health first (proxied by Vercel Edge / Vite), then direct Tailscale Funnel URL
-  const candidates = ['', DEFAULT_SERVER_URL];
-  const custom = localStorage.getItem(STORAGE_KEYS.API_URL);
-  if (custom) candidates.unshift(custom.replace(/\/+$/, ''));
-
-  for (const base of candidates) {
-    try {
-      const controller = new AbortController();
-      const timer = setTimeout(() => controller.abort(), 6000);
-      const res = await fetch(`${base}/api/health`, { signal: controller.signal });
-      clearTimeout(timer);
-      if (res.ok) {
-        const data = await res.json();
-        if (data && data.status === 'ok') {
-          activeBaseUrl = base;
-          backendReachable = true;
-          return { connected: true, info: data };
-        }
+  const base = getConfiguredApiUrl();
+  try {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(`${base}/api/health`, { signal: controller.signal });
+    clearTimeout(timer);
+    if (res.ok) {
+      const data = await res.json();
+      if (data && data.status === 'ok') {
+        backendReachable = true;
+        return { connected: true, info: data };
       }
-    } catch {
-      // Try next candidate
     }
+  } catch {
+    // Ignore transient ping error
   }
   return { connected: backendReachable, info: null };
 }
